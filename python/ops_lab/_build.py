@@ -17,10 +17,23 @@
 与 `scripts/check_env.py` 用的是同一份来源（见 design §M1.1 的 S0）。
 这样"报告里写的参数"和"真正编译用的参数"不可能漂移。
 
-## 当前阶段（S1-1）
+## 构建产物
 
-只把 `kernels/**/*.cu` 编译成对象文件，产物在 `build/ext/obj/`。
-链接成 Python 扩展是 S1-2 引入绑定之后的事。
+    build/ext/obj/kernels/**/*.cu.o     由 nvcc 编译
+    build/ext/obj/bindings/**/*.cpp.o   由 g++ 编译
+    build/ext/ops_lab_ext.so            由 nvcc 链接（存在 bindings/ 时）
+
+如果 `bindings/` 为空，则只编译对象文件、不链接 —— 这仍然是有用的模式
+（验证工具链、产出 ptxas 报告），不是临时状态。
+
+## 为什么要用 nvcc 而不是 g++ 链接
+
+对象文件里含设备代码（fatbin）与 CUDA 运行期注册桩，用 nvcc 链接能自动带上
+正确的运行期支持。库排在对象文件之后是链接器的常规顺序，照做即可。
+
+（实测补充：本机 nvcc 与 g++ 都**没有**启用 `--as-needed`，因此未被引用的
+`-ltorch` 也会被记进 `DT_NEEDED`。副作用是 S1-2 阶段即使不写 torch 代码，
+rpath 也已经被真实验证过了。）
 
 用法：
 
@@ -49,6 +62,8 @@ from ops_lab.envguard import sanitize_syspath  # noqa: E402
 BUILD_DIR = _REPO_ROOT / "build" / "ext"
 OBJ_SUBDIR = "obj"
 NINJA_FILE_NAME = "build.ninja"
+EXTENSION_NAME = "ops_lab_ext"
+EXTENSION_SUFFIX = ".so"
 
 
 def _nja(path: Path) -> str:
@@ -65,18 +80,28 @@ def collect_kernel_sources() -> list[Path]:
     return sorted((_REPO_ROOT / "kernels").rglob("*.cu"))
 
 
+def collect_binding_sources() -> list[Path]:
+    """bindings/ 下所有 .cpp（pybind11 胶水层）。"""
+    return sorted((_REPO_ROOT / "bindings").rglob("*.cpp"))
+
+
 def object_path(src: Path) -> Path:
     """对象文件路径：镜像源码目录结构，便于和源文件对照。"""
     rel = src.relative_to(_REPO_ROOT)
     return BUILD_DIR / OBJ_SUBDIR / rel.parent / (rel.name + ".o")
 
 
-def generate_ninja(cfg: build_config.BuildConfig, sources: list[Path]) -> Path:
+def extension_path() -> Path:
+    return BUILD_DIR / (EXTENSION_NAME + EXTENSION_SUFFIX)
+
+
+def generate_ninja(cfg: build_config.BuildConfig,
+                   kernels: list[Path],
+                   bindings: list[Path]) -> Path:
     """生成 build.ninja。每次都重新生成（很便宜），增量性交给 ninja。"""
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     ninja_file = BUILD_DIR / NINJA_FILE_NAME
 
-    flags = " ".join(cfg.nvcc_compile_flags())
     lines: list[str] = [
         "# 本文件由 python/ops_lab/_build.py 自动生成，请勿手工编辑。",
         "# 要改编译参数请改 ops_lab/build_config.py，要改构建逻辑请改 _build.py。",
@@ -84,7 +109,10 @@ def generate_ninja(cfg: build_config.BuildConfig, sources: list[Path]) -> Path:
         "ninja_required_version = 1.7",
         "",
         f"nvcc = {_nja(cfg.nvcc) if cfg.nvcc else 'nvcc'}",
-        f"nvccflags = {flags}",
+        f"nvccflags = {' '.join(cfg.nvcc_compile_flags())}",
+        f"cxx = {cfg.cxx}",
+        f"cxxflags = {' '.join(cfg.cxx_compile_flags())}",
+        f"linkflags = {' '.join(cfg.link_flags())}",
         "",
         "rule nvcc_compile",
         "  command = $nvcc $nvccflags -MMD -MF ${out}.d -c $in -o $out",
@@ -92,18 +120,38 @@ def generate_ninja(cfg: build_config.BuildConfig, sources: list[Path]) -> Path:
         "  deps = gcc",
         "  description = NVCC $in",
         "",
+        "rule cxx_compile",
+        "  command = $cxx $cxxflags -MMD -MF ${out}.d -c $in -o $out",
+        "  depfile = ${out}.d",
+        "  deps = gcc",
+        "  description = CXX  $in",
+        "",
+        "rule link",
+        # 库（在 $linkflags 里）排在 $in 之后是链接器的常规顺序。
+        "  command = $nvcc $in $linkflags -o $out",
+        "  description = LINK $out",
+        "",
     ]
 
-    outputs: list[str] = []
-    for src in sources:
+    objects: list[str] = []
+    for src in kernels:
         obj = object_path(src)
-        outputs.append(_nja(obj))
+        objects.append(_nja(obj))
         lines.append(f"build {_nja(obj)}: nvcc_compile {_nja(src)}")
+    for src in bindings:
+        obj = object_path(src)
+        objects.append(_nja(obj))
+        lines.append(f"build {_nja(obj)}: cxx_compile {_nja(src)}")
     lines.append("")
 
-    # 对象文件全部建好即完成（S1-1 没有链接目标）。
-    # ninja 会自动创建输出文件所在目录。
-    lines.append("default " + " ".join(outputs))
+    if bindings:
+        so = extension_path()
+        lines.append(f"build {_nja(so)}: link {' '.join(objects)}")
+        lines.append("")
+        lines.append(f"default {_nja(so)}")
+    else:
+        # 没有绑定源码时不链接，只产出对象文件
+        lines.append("default " + " ".join(objects))
     lines.append("")
 
     ninja_file.write_text("\n".join(lines), encoding="utf-8")
@@ -160,24 +208,28 @@ def main() -> int:
         print("\n先运行：python scripts/check_env.py", file=sys.stderr)
         return 1
 
-    sources = collect_kernel_sources()
-    if not sources:
-        print("没有找到任何 kernels/**/*.cu", file=sys.stderr)
+    kernels = collect_kernel_sources()
+    bindings = collect_binding_sources()
+    if not kernels and not bindings:
+        print("没有找到任何 kernels/**/*.cu 或 bindings/**/*.cpp", file=sys.stderr)
         return 1
 
-    ninja_file = generate_ninja(cfg, sources)
+    ninja_file = generate_ninja(cfg, kernels, bindings)
 
     print(f"[_build] 仓库根    {_REPO_ROOT}")
     print(f"[_build] 构建目录  {BUILD_DIR}")
     print(f"[_build] 目标架构  {cfg.arch}（{cfg.arch_source}）")
-    print(f"[_build] 源文件    {len(sources)} 个 .cu")
+    print(f"[_build] 源文件    {len(kernels)} 个 .cu，{len(bindings)} 个 .cpp")
 
     code = run_ninja(cfg, ninja_file, args.verbose)
     if code != 0:
         return code
 
     print("[_build] 构建完成")
-    print(f"[_build] 产物：{len(sources)} 个对象文件，位于 {BUILD_DIR / OBJ_SUBDIR}")
+    if bindings:
+        print(f"[_build] 产物：{extension_path()}")
+    else:
+        print(f"[_build] 产物：{len(kernels)} 个对象文件（无 bindings/，未链接）")
     return 0
 
 

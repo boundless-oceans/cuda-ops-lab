@@ -287,6 +287,9 @@ class BuildConfig:
             # "这是一个扩展模块"，并固定扩展名，避免符号可见性问题。
             "-DTORCH_API_INCLUDE_EXTENSION_H",
             "-DTORCH_EXTENSION_NAME=ops_lab_ext",
+            # 把目标架构编译进去。运行期可以据此校验"扩展是按哪个架构编的"，
+            # 排查"用错 arch"这类问题时不必去翻构建日志。
+            f"-DOPS_LAB_TARGET_ARCH_NUM={self.arch.replace('sm_', '')}",
         ]
 
     def _includes(self) -> list[str]:
@@ -338,11 +341,24 @@ class BuildConfig:
         ]
 
     def link_flags(self) -> list[str]:
+        """链接参数。
+
+        注意：本仓库用 **nvcc** 链接（对象文件里有设备代码与 CUDA 运行期注册桩），
+        而 nvcc **不认** gcc 的 `-Wl,...` 写法 —— 实测会报
+        "nvcc fatal : Unknown option '-Wl,-rpath,...'"。
+
+        也不能写成 `-Xcompiler=-Wl,-rpath,X`：`-Xcompiler` 的值是**逗号分隔**的，
+        会被拆成 `-Wl` / `-rpath` / `X` 三个独立选项而失效。
+
+        正确写法是 `-Xlinker -rpath -Xlinker <dir>`（每个链接器参数单独转发）。
+        """
         flags = ["-shared"]
         flags += [f"-L{d}" for d in self.library_dirs]
+        # 库必须排在对象文件之后（由调用方保证）：Ubuntu 默认 --as-needed，
+        # 排在对象文件之前且当时无人引用的库会被直接丢掉。
         flags += [f"-l{lib}" for lib in self.link_libs]
-        rpaths = [str(d) for d in self.library_dirs]
-        flags += [f"-Wl,-rpath,{d}" for d in rpaths]
+        for d in self.library_dirs:
+            flags += ["-Xlinker", "-rpath", "-Xlinker", str(d)]
         return flags
 
     def has_fatal(self) -> bool:
