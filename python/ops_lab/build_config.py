@@ -287,21 +287,49 @@ class BuildConfig:
             # "这是一个扩展模块"，并固定扩展名，避免符号可见性问题。
             "-DTORCH_API_INCLUDE_EXTENSION_H",
             "-DTORCH_EXTENSION_NAME=ops_lab_ext",
+            # 把目标架构编译进去。运行期可以据此校验"扩展是按哪个架构编的"，
+            # 排查"用错 arch"这类问题时不必去翻构建日志。
+            f"-DOPS_LAB_TARGET_ARCH_NUM={self.arch.replace('sm_', '')}",
         ]
 
     def _includes(self) -> list[str]:
         return [f"-I{d}" for d in self.include_dirs]
 
+    def _include_flags(self, for_nvcc: bool) -> list[str]:
+        """仓库自己的头文件用 -I，第三方（torch / CUDA / python）用 -isystem。
+
+        这样 `-Wall -Wextra` 只作用于我们的代码。否则 torch 与 CUDA 头文件里的
+        历史遗留写法会刷出上百条警告，把真正的问题淹没。
+
+        nvcc 不直接认 -isystem，需要经 -Xcompiler 转发给宿主编译器。
+        """
+        flags: list[str] = []
+        for d in self.include_dirs:
+            if d == REPO_ROOT:
+                flags.append(f"-I{d}")
+            elif for_nvcc:
+                flags.append(f"-Xcompiler=-isystem,{d}")
+            else:
+                flags.append(f"-isystem{d}")
+        return flags
+
     def nvcc_compile_flags(self) -> list[str]:
         return [
-            "-std=c++17", "-O3", "-fPIC",
+            "-std=c++17", "-O3",
+            # 注意：nvcc **不认** -fPIC，必须经 -Xcompiler 转发给宿主编译器。
+            # （实测：直接写 -fPIC 会得到 "nvcc fatal : Unknown option '-fPIC'"）
+            "-Xcompiler=-fPIC",
             "-lineinfo",              # 给 ncu 用，代价很小
             self.arch_flag,
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
             "-Xcompiler=-Wall,-Wextra",
+            # ptxas 的资源报告（寄存器数 / spill / smem）。ninja 在成功时会丢弃
+            # 命令输出，所以平时看不到；用 `_build.py -v` 就能看到，
+            # S6 的 resource_report.py 也会解析这些字段。
+            "-Xptxas=-v",
             *self._common_defines(),
-            *self._includes(),
+            *self._include_flags(for_nvcc=True),
         ]
 
     def cxx_compile_flags(self) -> list[str]:
@@ -309,15 +337,28 @@ class BuildConfig:
             "-std=c++17", "-O3", "-fPIC",
             "-Wall", "-Wextra",
             *self._common_defines(),
-            *self._includes(),
+            *self._include_flags(for_nvcc=False),
         ]
 
     def link_flags(self) -> list[str]:
+        """链接参数。
+
+        注意：本仓库用 **nvcc** 链接（对象文件里有设备代码与 CUDA 运行期注册桩），
+        而 nvcc **不认** gcc 的 `-Wl,...` 写法 —— 实测会报
+        "nvcc fatal : Unknown option '-Wl,-rpath,...'"。
+
+        也不能写成 `-Xcompiler=-Wl,-rpath,X`：`-Xcompiler` 的值是**逗号分隔**的，
+        会被拆成 `-Wl` / `-rpath` / `X` 三个独立选项而失效。
+
+        正确写法是 `-Xlinker -rpath -Xlinker <dir>`（每个链接器参数单独转发）。
+        """
         flags = ["-shared"]
         flags += [f"-L{d}" for d in self.library_dirs]
+        # 库必须排在对象文件之后（由调用方保证）：Ubuntu 默认 --as-needed，
+        # 排在对象文件之前且当时无人引用的库会被直接丢掉。
         flags += [f"-l{lib}" for lib in self.link_libs]
-        rpaths = [str(d) for d in self.library_dirs]
-        flags += [f"-Wl,-rpath,{d}" for d in rpaths]
+        for d in self.library_dirs:
+            flags += ["-Xlinker", "-rpath", "-Xlinker", str(d)]
         return flags
 
     def has_fatal(self) -> bool:
