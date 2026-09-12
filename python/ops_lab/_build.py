@@ -188,16 +188,15 @@ def run_ninja(cfg: build_config.BuildConfig, ninja_file: Path, verbose: bool) ->
     return 0
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="cuda-ops-lab 扩展构建")
-    ap.add_argument("-v", "--verbose", action="store_true",
-                    help="打印真实命令行与 ptxas 资源报告（默认只在失败时显示）")
-    ap.add_argument("--clean", action="store_true", help="删除 build/ 后重新构建")
-    args = ap.parse_args()
+def build(clean: bool = False, verbose: bool = False) -> int:
+    """以编程方式执行一次构建，返回退出码（0 = 成功）。
 
-    sanitize_syspath(verbose=args.verbose)
+    这是 `_extension.py` 在发现扩展缺失/过期时调用的入口。
+    命令行走 `main()`，两者共用同一段逻辑，避免"能手动构建但自动构建不工作"。
+    """
+    sanitize_syspath(verbose=verbose)
 
-    if args.clean:
+    if clean:
         shutil.rmtree(BUILD_DIR, ignore_errors=True)
 
     cfg = build_config.detect()
@@ -221,7 +220,7 @@ def main() -> int:
     print(f"[_build] 目标架构  {cfg.arch}（{cfg.arch_source}）")
     print(f"[_build] 源文件    {len(kernels)} 个 .cu，{len(bindings)} 个 .cpp")
 
-    code = run_ninja(cfg, ninja_file, args.verbose)
+    code = run_ninja(cfg, ninja_file, verbose)
     if code != 0:
         return code
 
@@ -231,6 +230,15 @@ def main() -> int:
     else:
         print(f"[_build] 产物：{len(kernels)} 个对象文件（无 bindings/，未链接）")
     return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="cuda-ops-lab 扩展构建")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="打印真实命令行与 ptxas 资源报告（默认只在失败时显示）")
+    ap.add_argument("--clean", action="store_true", help="删除 build/ 后重新构建")
+    args = ap.parse_args()
+    return build(clean=args.clean, verbose=args.verbose)
 
 
 if __name__ == "__main__":

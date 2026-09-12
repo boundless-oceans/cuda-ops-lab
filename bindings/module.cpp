@@ -2,25 +2,27 @@
 //
 // Python 扩展的入口。
 //
-// S1-2 阶段这里**只有 `_probe()`，故意不引入任何 torch 符号**。
-// 目的是把故障二分掉：
+// 层层递进的故障定位（S1 分三步做的原因）：
 //
-//   S1-1  只编译 .cu            → 失败说明问题在 nvcc 侧
-//   S1-2  编译 .cpp + 链接 + 加载 → 失败说明问题在构建管道 / 动态库加载
-//   S1-3  才引入 torch::Tensor   → 失败就一定是 ABI 或 torch 链接的问题
+//   S1-1  只编译 .cu              → 失败说明问题在 nvcc 侧
+//   S1-2  编译 .cpp + 链接 + 加载  → 失败说明问题在构建管道 / 动态库加载
+//   S1-3  引入 torch::Tensor       → 失败就一定是 ABI 或 torch 符号解析
 //
-// 关于 rpath：这里不引用任何 torch 符号，原本预期链接器（Ubuntu 默认
-// --as-needed）会把 -ltorch 之类丢掉、从而验证不到 rpath。
-// 但实测并非如此 —— nvcc 与 g++ 都仍把 libtorch.so 记进了 DT_NEEDED
-// （本机链接并未启用 --as-needed），所以 rpath 在本步就已经被真实验证：
-// ldd 能把 libtorch.so 解析到 torch/lib 目录下。
-//
-// 于是 S1-3 要验证的是剩下那一半：真正的 torch 符号能否按 ABI=0 正确解析。
+// 本文件自己不引用任何 torch 符号，只负责把各章的绑定挂上来。
 #include <pybind11/pybind11.h>
 
 #include <string>
 
+#include "bindings/registry.h"
+
 namespace py = pybind11;
+
+namespace ops_lab {
+
+// 各章的绑定的入口，实现在 bind_<chapter>.cpp 里。
+void bind_elementwise(py::module_& m);
+
+}  // namespace ops_lab
 
 namespace {
 
@@ -28,7 +30,7 @@ namespace {
 #if defined(_GLIBCXX_USE_CXX11_ABI)
 constexpr int kAbiCxx11 = _GLIBCXX_USE_CXX11_ABI;
 #else
-constexpr int kAbiCxx11 = -1;  // 未定义，说明构建脚本没注入，是异常情况
+constexpr int kAbiCxx11 = -1;  // 未定义，说明构建脚本没注入，属异常情况
 #endif
 
 // 构建探针：确认扩展**确实被加载进来了**，而不是某个同名的旧文件。
@@ -51,6 +53,21 @@ py::dict probe() {
   return info;
 }
 
+// 列出所有已登记的导出算子。
+// S4 会用它做"元数据 ↔ 导出符号"的双向一致性校验。
+py::list list_kernels() {
+  py::list out;
+  for (const auto& k : ops_lab::Registry::instance().all()) {
+    py::dict entry;
+    entry["name"] = k.name;
+    entry["chapter"] = k.chapter;
+    entry["variant"] = k.variant;
+    entry["description"] = k.description;
+    out.append(entry);
+  }
+  return out;
+}
+
 }  // namespace
 
 PYBIND11_MODULE(ops_lab_ext, m) {
@@ -58,4 +75,9 @@ PYBIND11_MODULE(ops_lab_ext, m) {
 
   m.def("_probe", &probe,
         "构建探针：返回扩展的编译期信息，用于确认加载的是正确的构建产物");
+  m.def("list_kernels", &list_kernels,
+        "列出所有已登记的导出算子（name/chapter/variant/description）");
+
+  // 各章注册自己的绑定
+  ops_lab::bind_elementwise(m);
 }
