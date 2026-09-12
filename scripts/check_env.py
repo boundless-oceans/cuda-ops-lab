@@ -166,7 +166,7 @@ def _gpu_rows() -> tuple[list[tuple[str, str, str]], dict]:
                 (
                     "说明",
                     "torch.cuda.is_available() 为 False。在无 GPU 的沙箱/容器里属正常；"
-                    "在你本机应显示 4060。",
+                    "在有 GPU 的机器上，这里会显示设备名、算力与理论带宽。",
                     WARN,
                 ),
                 (

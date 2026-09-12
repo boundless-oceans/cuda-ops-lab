@@ -35,11 +35,12 @@ struct DeviceInfo {
   double mem_bandwidth_gbps = 0;  // 理论峰值带宽
 };
 
-// 理论峰值带宽 = 显存频率 × 位宽 / 8 × 2（DDR 双边沿）
-// 例：RTX 4060 Laptop = 8 Gbps × 128 bit / 8 = 128 GB/s ... 实际颗粒等效
-// 8000 MT/s × 128 / 8 = 128 GB/s；手册写的 ~256 GB/s 是 GPU Boost 下的等效值。
-// 这里用 memClockRate（kHz）× busWidth 算出来的值偏保守，对"判断离上限多远"
-// 反而更安全 —— 我们宁可低估峰值，也不要高估自己。
+// 理论峰值带宽 = 显存时钟(kHz) × 位宽(bit) / 8 × 2（DDR 双边沿）
+// 例：4_000_000 kHz × 128 bit / 8 × 2 = 128 GB/s
+//
+// 注意：厂商手册上的标称带宽常常更高，因为用的是颗粒的**等效数据率**（MT/s）
+// 而不是实际时钟。这里刻意采用保守算法 —— 判断"离上限多远"时，
+// 宁可低估峰值，也不要高估自己。
 inline double compute_bandwidth_gbps(int mem_clock_khz, int bus_width_bits) {
   // kHz * bit / 8 -> bytes/s，再乘 2 表示 DDR 双边沿，最后转 GB/s
   const double bytes_per_sec =

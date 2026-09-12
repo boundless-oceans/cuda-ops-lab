@@ -12,9 +12,9 @@ S0 的产出是"环境报告"，S1 的产出是"能编译的构建脚本"。如�
 
 ## 这里编码的都是实测结论
 
-* torch 与 nvcc 的 CUDA 版本必须对齐（本机两边都是 11.8）
-* `_GLIBCXX_USE_CXX11_ABI` 必须跟 torch 一致（本机实测为 False → 定义成 0）
-* ninja 不一定在 PATH 上（沙箱里 `$CONDA_PREFIX/bin/ninja` 就看不到）
+* torch 与 nvcc 的 CUDA 版本必须对齐（不一致会出现 c10::cuda 符号缺失）
+* `_GLIBCXX_USE_CXX11_ABI` 必须跟 torch 一致（从 torch 自身读出后定义成 0 或 1）
+* ninja 不一定在 PATH 上（可能在 `$CONDA_PREFIX/bin` 而不在 PATH）
 * pybind11 用 torch 自带的那份，不额外安装
 """
 
@@ -42,6 +42,14 @@ _CUDA_MAX_GCC = {
 }
 
 _ARCH_RE = re.compile(r"(?:compute_|sm_)?(\d{2,3})")
+
+# 项目的默认编译目标架构（compute capability 8.9，Ada 架构）。
+# 这是**项目级常量**，不是对某台具体机器的假定：
+#   * 能探测到 GPU 时，一律以实际设备的算力为准；
+#   * 探测不到时可临时用环境变量 OPS_LAB_ARCH 覆盖；
+#   * 只有在两者都不可用时才回退到这里。
+# 若该架构不被当前 nvcc 支持，detect() 会报错而不是静默产出错误的目标码。
+DEFAULT_ARCH = "sm_89"
 
 
 def repo_root() -> Path:
@@ -202,11 +210,16 @@ def _detect_arch(nvcc: Path | None, supported: list[str]) -> tuple[str, str]:
         if raw.isdigit():
             return f"sm_{raw}", "nvidia-smi 报告的当前设备算力"
 
-    if "compute_89" in supported:
-        return "sm_89", "探测不到 GPU，按本仓库目标机器（RTX 4060 Laptop, sm_89）假定"
+    if f"compute_{DEFAULT_ARCH.replace('sm_', '')}" in supported:
+        return DEFAULT_ARCH, (
+            f"探测不到 GPU 且未设置 OPS_LAB_ARCH，回退到项目默认架构 {DEFAULT_ARCH}"
+        )
     if supported:
-        return _normalize_arch(supported[-1]), "探测不到 GPU，回退到本机 nvcc 支持的最高架构"
-    return "sm_89", "探测不到 GPU 且 nvcc 无法列出架构，硬编码 sm_89"
+        return _normalize_arch(supported[-1]), (
+            f"探测不到 GPU，且项目默认架构 {DEFAULT_ARCH} 不被当前 nvcc 支持，"
+            f"回退到其支持的最高架构"
+        )
+    return DEFAULT_ARCH, "探测不到 GPU 且 nvcc 无法列出架构，回退到项目默认架构"
 
 
 # ------------------------------------------------------------------------- 结果
@@ -334,7 +347,10 @@ def detect() -> BuildConfig:
         cfg.include_dirs += [Path(p) for p in ce.include_paths()]
         cfg.library_dirs += [Path(p) for p in ce.library_paths()]
     except ImportError as exc:
-        cfg.problems.append(f"无法 import torch：{exc}。请先激活正确的环境（conda activate opslab）")
+        cfg.problems.append(
+            f"无法 import torch：{exc}。请先激活正确的 conda 环境"
+            "（例如 conda activate <本仓库的环境名>）"
+        )
         return cfg
 
     # ---- nvcc ----
