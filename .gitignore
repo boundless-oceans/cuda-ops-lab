@@ -1,0 +1,35 @@
+# ---- C/C++/CUDA 构建产物 ----
+build/
+_ext_cache/
+*.o
+*.obj
+*.so
+*.a
+*.ptx
+*.cubin
+*.fatbin
+*.sass
+compile_commands.json
+
+# ---- 可执行文件 ----
+bin/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---- 基准 / 分析结果（可复现生成，不入库）----
+bench/results/
+analysis/out/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# ---- 设计稿 ----
+docs/DESIGN.md
