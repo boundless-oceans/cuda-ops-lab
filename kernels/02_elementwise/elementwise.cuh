@@ -87,5 +87,29 @@ void add_v2_unroll4(const float* x, const float* y, float* out, int64_t n, cudaS
 void relu_v2_unroll4(const float* x, float* out, int64_t n, cudaStream_t stream);
 void sigmoid_v2_unroll4(const float* x, float* out, int64_t n, cudaStream_t stream);
 
+// ---------------------------------------------------------------------------
+// v3_grid_stride —— 固定 grid + kernel 内循环步进
+//
+// 思路
+//   grid = SM 数 × 每 SM 能驻留的 block 数（"刚好填满机器"），每个线程靠
+//   循环步进处理 i、i+stride、i+2*stride……。grid 不再随 n 增长。
+//
+// 确定的收益（功能性）
+//   v1 / v2 的 grid 受 2^31-1 上限约束，超出就抛错；v3 的循环步进天然覆盖
+//   任意大的 n，**没有上限**。另外循环条件本身就是完整的边界处理，
+//   不需要额外的尾部路径。
+//
+// 不确定的收益（性能）
+//   "消除尾部空转"这个流传很广的理由，对大规模输入其实很弱：n = 2^24 时
+//   grid 有 65536 个 block 而机器一次只能驻留一百多个，最后那个没填满的 wave
+//   只占百分之零点几。
+//   所以 v3 可能和 v1 / v2 差不多快，甚至更慢。**这要靠实测判断** ——
+//   三者带宽相当本身就是一个有价值的结论。
+// ---------------------------------------------------------------------------
+void add_v3_grid_stride(const float* x, const float* y, float* out, int64_t n,
+                        cudaStream_t stream);
+void relu_v3_grid_stride(const float* x, float* out, int64_t n, cudaStream_t stream);
+void sigmoid_v3_grid_stride(const float* x, float* out, int64_t n, cudaStream_t stream);
+
 }  // namespace elementwise
 }  // namespace ops_lab

@@ -3,8 +3,6 @@
 // 第 1 章的绑定：两个受控实验。
 #include <torch/extension.h>
 
-#include <algorithm>
-
 #include <c10/cuda/CUDAStream.h>
 
 #include "bindings/bind_helpers.h"
@@ -13,15 +11,6 @@
 namespace {
 
 cudaStream_t current_stream() { return at::cuda::getCurrentCUDAStream(); }
-
-// 按设备规模选一个"刚好填满机器"的 grid：
-// 每 SM 放满 max_threads_per_sm / block_size 个 block。
-// 这是 grid-stride kernel 的常用起点。
-int auto_grid_size(int block_size) {
-  const ops_lab::DeviceInfo info = ops_lab::query_device();
-  const int blocks_per_sm = std::max(1, info.max_threads_per_sm / block_size);
-  return info.sm_count * blocks_per_sm;
-}
 
 torch::Tensor make_index_output(int64_t n) {
   return torch::empty({n}, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
@@ -48,8 +37,9 @@ torch::Tensor execution_hello_v2_grid_stride(int64_t n, int64_t block_size, int6
   if (n == 0) {
     return out;
   }
+  // grid_size = 0 表示自动：按设备规模选一个"刚好填满机器"的 grid。
   const int grid = grid_size > 0 ? static_cast<int>(grid_size)
-                                 : auto_grid_size(static_cast<int>(block_size));
+                                 : ops_lab::default_grid_size(static_cast<int>(block_size));
   ops_lab::execution::hello_v2_grid_stride(out.data_ptr<int32_t>(), n,
                                            static_cast<int>(block_size), grid, current_stream());
   return out;

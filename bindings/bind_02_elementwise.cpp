@@ -71,12 +71,15 @@ void bind_elementwise(py::module_& m) {
   using elementwise::add_v0_uncoalesced;
   using elementwise::add_v1_naive;
   using elementwise::add_v2_unroll4;
+  using elementwise::add_v3_grid_stride;
   using elementwise::relu_v0_uncoalesced;
   using elementwise::relu_v1_naive;
   using elementwise::relu_v2_unroll4;
+  using elementwise::relu_v3_grid_stride;
   using elementwise::sigmoid_v0_uncoalesced;
   using elementwise::sigmoid_v1_naive;
   using elementwise::sigmoid_v2_unroll4;
+  using elementwise::sigmoid_v3_grid_stride;
 
   // ---------------------------------------------------------------------
   // v1_naive —— 基准点：已合并访存，但每线程只有 1 个访存在飞
@@ -125,6 +128,22 @@ void bind_elementwise(py::module_& m) {
   bind_kernel(m, "elementwise_sigmoid_v2_unroll4", "02_elementwise", "v2_unroll4",
               "每线程 4 个元素，靠 ILP 提高并发度",
               [](torch::Tensor x) { return run_unary("elementwise_sigmoid", x, &sigmoid_v2_unroll4); });
+
+  // ---------------------------------------------------------------------
+  // v3_grid_stride —— grid 固定成"刚好填满机器"，循环步进覆盖任意大的 n
+  // ---------------------------------------------------------------------
+  bind_kernel(m, "elementwise_add_v3_grid_stride", "02_elementwise", "v3_grid_stride",
+              "grid 固定为 SM 数 × 每 SM 块数，循环步进；无 grid 上限",
+              [](torch::Tensor x, torch::Tensor y) {
+                return run_binary("elementwise_add", x, y, &add_v3_grid_stride);
+              });
+  bind_kernel(m, "elementwise_relu_v3_grid_stride", "02_elementwise", "v3_grid_stride",
+              "grid 固定 + 循环步进；无 grid 上限",
+              [](torch::Tensor x) { return run_unary("elementwise_relu", x, &relu_v3_grid_stride); });
+  bind_kernel(m, "elementwise_sigmoid_v3_grid_stride", "02_elementwise", "v3_grid_stride",
+              "grid 固定 + 循环步进；无 grid 上限", [](torch::Tensor x) {
+                return run_unary("elementwise_sigmoid", x, &sigmoid_v3_grid_stride);
+              });
 }
 
 }  // namespace ops_lab
