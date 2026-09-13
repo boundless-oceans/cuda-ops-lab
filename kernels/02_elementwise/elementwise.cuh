@@ -63,5 +63,29 @@ void add_v0_uncoalesced(const float* x, const float* y, float* out, int64_t n,
 void relu_v0_uncoalesced(const float* x, float* out, int64_t n, cudaStream_t stream);
 void sigmoid_v0_uncoalesced(const float* x, float* out, int64_t n, cudaStream_t stream);
 
+// ---------------------------------------------------------------------------
+// v2_unroll4 —— 提高每线程的指令级并行（ILP）
+//
+// 思路
+//   线程数降到 1/4，但每个线程一口气处理 4 个元素：先把 4 个 x 和 4 个 y
+//   全部读进来（8 个互不依赖的 load），再统一计算、统一写回。
+//   总并发度 = 线程数 × 每线程在飞请求数，后一项把前一项的下降补了回来。
+//
+// 与 v1_naive 的关系
+//   v1 也已经合并访存 —— 它的问题是**并发度不足**，不是访存模式不好。
+//   所以 v2 修的是另一个瓶颈：每线程只有 1 个访存在飞。
+//
+// 代价
+//   寄存器占用上升（要同时装下 4 个 x 和 4 个 y），ILP 与 occupancy 在这里
+//   开始互相拉扯。这正是本章值得动手调 kUnroll 的地方。
+//
+// 预期
+//   有效带宽比 v1 高约 10 个百分点。若实测没提升甚至下降，说明 occupancy
+//   已经被寄存器吃掉了 —— 那也是一个有价值的结论。
+// ---------------------------------------------------------------------------
+void add_v2_unroll4(const float* x, const float* y, float* out, int64_t n, cudaStream_t stream);
+void relu_v2_unroll4(const float* x, float* out, int64_t n, cudaStream_t stream);
+void sigmoid_v2_unroll4(const float* x, float* out, int64_t n, cudaStream_t stream);
+
 }  // namespace elementwise
 }  // namespace ops_lab
