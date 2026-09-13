@@ -2,11 +2,11 @@
 //
 // Python 扩展的入口。
 //
-// 层层递进的故障定位（S1 分三步做的原因）：
+// 构建链路是分三层逐步建立起来的，每层解决一类问题，出故障时便于定位：
 //
-//   S1-1  只编译 .cu              → 失败说明问题在 nvcc 侧
-//   S1-2  编译 .cpp + 链接 + 加载  → 失败说明问题在构建管道 / 动态库加载
-//   S1-3  引入 torch::Tensor       → 失败就一定是 ABI 或 torch 符号解析
+//   1. 只编译 .cu                → 失败说明问题在 nvcc 侧
+//   2. 编译 .cpp + 链接 + 加载    → 失败说明问题在构建管道 / 动态库加载
+//   3. 引入 torch::Tensor         → 失败就一定是 ABI 或 torch 符号解析
 //
 // 本文件自己不引用任何 torch 符号，只负责把各章的绑定挂上来。
 #include <pybind11/pybind11.h>
@@ -19,7 +19,8 @@ namespace py = pybind11;
 
 namespace ops_lab {
 
-// 各章的绑定的入口，实现在 bind_<chapter>.cpp 里。
+// 各章的绑定入口，实现在 bind_<chapter>.cpp 里。
+void bind_execution(py::module_& m);
 void bind_elementwise(py::module_& m);
 
 }  // namespace ops_lab
@@ -79,5 +80,6 @@ PYBIND11_MODULE(ops_lab_ext, m) {
         "列出所有已登记的导出算子（name/chapter/variant/description）");
 
   // 各章注册自己的绑定
+  ops_lab::bind_execution(m);
   ops_lab::bind_elementwise(m);
 }
