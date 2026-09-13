@@ -39,6 +39,29 @@ constexpr int kBlockSize = 256;
 //   思维转换点。
 // ---------------------------------------------------------------------------
 void add_v1_naive(const float* x, const float* y, float* out, int64_t n, cudaStream_t stream);
+void relu_v1_naive(const float* x, float* out, int64_t n, cudaStream_t stream);
+void sigmoid_v1_naive(const float* x, float* out, int64_t n, cudaStream_t stream);
+
+// ---------------------------------------------------------------------------
+// v0_uncoalesced —— 反面教材
+//
+// 思路
+//   索引写成 i = threadIdx.x * gridDim.x + blockIdx.x，相邻线程的地址因此
+//   相隔 gridDim.x 个元素。一个 warp 的 32 个线程落在 32 条不同的 cache line
+//   上，一次访存请求被拆成 32 个事务。
+//
+// 与 v1_naive 的关系
+//   **只差索引公式那一行**，其余（grid 大小、边界检查、无循环）完全相同，
+//   所以阶梯表里 v0 → v1 的差距只能归因于访存模式。
+//
+// 预期
+//   有效带宽 ≈ 峰值的 10~20%。这是本章唯一"故意写错"的一级，存在的意义是
+//   让"未合并访存"这件事有一个可测量的代价，而不是一句口号。
+// ---------------------------------------------------------------------------
+void add_v0_uncoalesced(const float* x, const float* y, float* out, int64_t n,
+                        cudaStream_t stream);
+void relu_v0_uncoalesced(const float* x, float* out, int64_t n, cudaStream_t stream);
+void sigmoid_v0_uncoalesced(const float* x, float* out, int64_t n, cudaStream_t stream);
 
 }  // namespace elementwise
 }  // namespace ops_lab
