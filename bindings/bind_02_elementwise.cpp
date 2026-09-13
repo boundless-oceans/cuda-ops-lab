@@ -72,14 +72,17 @@ void bind_elementwise(py::module_& m) {
   using elementwise::add_v1_naive;
   using elementwise::add_v2_unroll4;
   using elementwise::add_v3_grid_stride;
+  using elementwise::add_v4_vectorized;
   using elementwise::relu_v0_uncoalesced;
   using elementwise::relu_v1_naive;
   using elementwise::relu_v2_unroll4;
   using elementwise::relu_v3_grid_stride;
+  using elementwise::relu_v4_vectorized;
   using elementwise::sigmoid_v0_uncoalesced;
   using elementwise::sigmoid_v1_naive;
   using elementwise::sigmoid_v2_unroll4;
   using elementwise::sigmoid_v3_grid_stride;
+  using elementwise::sigmoid_v4_vectorized;
 
   // ---------------------------------------------------------------------
   // v1_naive —— 基准点：已合并访存，但每线程只有 1 个访存在飞
@@ -143,6 +146,22 @@ void bind_elementwise(py::module_& m) {
   bind_kernel(m, "elementwise_sigmoid_v3_grid_stride", "02_elementwise", "v3_grid_stride",
               "grid 固定 + 循环步进；无 grid 上限", [](torch::Tensor x) {
                 return run_unary("elementwise_sigmoid", x, &sigmoid_v3_grid_stride);
+              });
+
+  // ---------------------------------------------------------------------
+  // v4_vectorized —— float4，访存指令数降 4 倍；尾部走标量路径
+  // ---------------------------------------------------------------------
+  bind_kernel(m, "elementwise_add_v4_vectorized", "02_elementwise", "v4_vectorized",
+              "float4 向量化，访存指令数降 4 倍；非 4 倍数尾部走标量路径",
+              [](torch::Tensor x, torch::Tensor y) {
+                return run_binary("elementwise_add", x, y, &add_v4_vectorized);
+              });
+  bind_kernel(m, "elementwise_relu_v4_vectorized", "02_elementwise", "v4_vectorized",
+              "float4 向量化；非对齐时退回标量路径",
+              [](torch::Tensor x) { return run_unary("elementwise_relu", x, &relu_v4_vectorized); });
+  bind_kernel(m, "elementwise_sigmoid_v4_vectorized", "02_elementwise", "v4_vectorized",
+              "float4 向量化；非对齐时退回标量路径", [](torch::Tensor x) {
+                return run_unary("elementwise_sigmoid", x, &sigmoid_v4_vectorized);
               });
 }
 

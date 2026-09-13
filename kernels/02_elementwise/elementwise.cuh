@@ -111,5 +111,29 @@ void add_v3_grid_stride(const float* x, const float* y, float* out, int64_t n,
 void relu_v3_grid_stride(const float* x, float* out, int64_t n, cudaStream_t stream);
 void sigmoid_v3_grid_stride(const float* x, float* out, int64_t n, cudaStream_t stream);
 
+// ---------------------------------------------------------------------------
+// v4_vectorized —— float4 向量化
+//
+// 思路
+//   一次访存搬 16 字节而不是 4 字节，**访存指令数降 4 倍**。
+//   刻意不加 grid-stride：v4 = v1 + 向量化，只改一个变量，这样阶梯表里
+//   v1 → v4 的差距才能干净地归因于访存宽度。
+//
+// 四个边界风险（本章唯一真正容易写错的地方）
+//   1. n 不是 4 的倍数       → 尾部 0~3 个元素走标量路径
+//   2. 指针不是 16 字节对齐   → **退回 v1 的标量路径，而不是报错**
+//   3. n < 4                → n4 = 0，但要保证 grid 至少有 1 个 block，
+//                             否则尾部无人处理
+//   4. grid 覆盖不到尾巴      → 尾部复用线程 0~2 的下标
+//
+// 预期
+//   比 v1 高约 10 个百分点。若实测几乎没差别，说明这台机器在 v1 那种写法下
+//   带宽就已经接近饱和，向量化省下的是指令而不是时间。
+// ---------------------------------------------------------------------------
+void add_v4_vectorized(const float* x, const float* y, float* out, int64_t n,
+                       cudaStream_t stream);
+void relu_v4_vectorized(const float* x, float* out, int64_t n, cudaStream_t stream);
+void sigmoid_v4_vectorized(const float* x, float* out, int64_t n, cudaStream_t stream);
+
 }  // namespace elementwise
 }  // namespace ops_lab
