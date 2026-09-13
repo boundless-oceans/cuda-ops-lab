@@ -32,7 +32,14 @@ OPS = {
     "hello": {
         "variants": {
             "v1_naive": "execution_hello_v1_naive",
-            "v2_grid_stride": "execution_hello_v2_grid_stride",
+            # v2 比 v1 多两个参数：block_size 与 grid_size（grid_size=0 表示
+            # 按设备规模自动选）。这里显式给 (256, 0)，而不是改成 binding 的
+            # 默认参数 —— 一是注册表本来就支持"一个符号 + 额外参数"，二是
+            # 第 1 章本来就是关于 grid 的实验，把 block/grid 显式写出来更诚实。
+            "v2_grid_stride": {
+                "symbol": "execution_hello_v2_grid_stride",
+                "args": [256, 0],
+            },
         },
         # 输入不是张量，而是一个整数 n —— 所以必须自定义 gen
         "gen": lambda shape: (shape[0],),

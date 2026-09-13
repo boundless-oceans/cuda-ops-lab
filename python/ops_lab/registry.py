@@ -56,6 +56,7 @@ __all__ = [
     "call",
     "declared_symbols",
     "exported_symbols",
+    "bound_arity",
     "consistency_report",
     "utility_symbols",
 ]
@@ -185,6 +186,39 @@ def exported_symbols() -> set[str]:
     from . import _extension
 
     return {entry["name"] for entry in _extension.get().list_kernels()}
+
+
+def bound_arity(symbol: str) -> int | None:
+    """解析某个导出符号**实际接受**的参数个数。
+
+    为什么不用 `inspect.signature`：它对 pybind11 的内建函数会抛
+    `ValueError: no signature found for builtin`。但 pybind11 把签名放在了
+    `__doc__` 的首行，形如：
+
+        name(arg0: int, arg1: torch.Tensor) -> torch.Tensor
+
+    解析不出来时返回 None —— 调用方应当**跳过**而不是当成 0，否则会误报。
+    """
+    import re
+
+    from . import _extension
+
+    fn = getattr(_extension.get(), symbol, None)
+    if fn is None:
+        return None
+
+    first_line = (getattr(fn, "__doc__", None) or "").splitlines()
+    if not first_line:
+        return None
+
+    match = re.search(r"\((.*)\)\s*->", first_line[0])
+    if not match:
+        return None
+
+    inner = match.group(1).strip()
+    if not inner:
+        return 0
+    return len([part for part in inner.split(",") if part.strip()])
 
 
 def consistency_report() -> dict[str, list[str]]:

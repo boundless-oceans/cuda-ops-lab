@@ -135,3 +135,33 @@ def test_symbol_consistency() -> None:
             + ", ".join(rep["exported_not_declared"])
         )
     assert_true(not messages, " | ".join(messages))
+
+
+@test("每个变体的参数个数与绑定一致", group="meta")
+def test_arity_matches_binding() -> None:
+    """把"元数据声明了几个输入"和"扩展实际接受几个参数"对起来。
+
+    这条检查是**被真机上的失败逼出来的**：`hello/v2_grid_stride` 声明只传 n，
+    但绑定的函数要 (n, block_size, grid_size)，于是真机测试报 TypeError。
+    而 `test_generic` 的用例都标了需要 GPU，在没显卡的机器上全被跳过 ——
+    这类不一致会一直潜伏，直到有人上真机跑才炸。
+
+    所以必须有一条离线检查把它挡住。pybind11 的签名藏在 __doc__ 首行，
+    registry.bound_arity() 负责解析。
+    """
+    specs = {(chapter, op): spec for chapter, op, spec in reg.iter_ops()}
+    problems = []
+    for ref in reg.iter_variants():
+        spec = specs[(ref.chapter, ref.op)]
+        declared_inputs = reg.arity(spec)
+        expected = declared_inputs + len(ref.extra_args)
+        actual = reg.bound_arity(ref.symbol)
+        if actual is None:
+            continue  # 解析不出签名就不判，避免误报
+        if actual != expected:
+            problems.append(
+                f"{ref}：元数据声明 {expected} 个参数"
+                f"（参考实现 {declared_inputs} 个 + 变体额外 {len(ref.extra_args)} 个），"
+                f"但 {ref.symbol} 实际接受 {actual} 个"
+            )
+    assert_true(not problems, "; ".join(problems))
