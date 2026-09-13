@@ -73,6 +73,24 @@ inline DeviceInfo query_device(int ordinal = 0) {
   return info;
 }
 
+inline int current_device() {
+  int dev = 0;
+  OPSLAB_CUDA_CHECK(cudaGetDevice(&dev));
+  return dev;
+}
+
+// 设备信息缓存。
+//
+// 为什么需要缓存：`cudaGetDeviceProperties` 不是一条便宜调用，而每次启动
+// kernel 都重新查一遍设备属性纯属浪费。这里只查一次（C++11 的局部 static
+// 初始化是线程安全的）。
+//
+// 前提：进程生命周期内不切换设备。本仓库是单卡工作流，够用。
+inline const DeviceInfo& cached_device_info() {
+  static const DeviceInfo info = query_device(current_device());
+  return info;
+}
+
 // 当前进程可见的 GPU 数量。沙箱/无驱动环境返回 0 而不是抛异常，
 // 这样 check_env.py 能优雅地报告"无 GPU"，而不是崩溃。
 inline int device_count() {
@@ -107,17 +125,33 @@ inline Occupancy query_occupancy(const void* kernel, int block_size, int dynamic
       &blocks, kernel, block_size, static_cast<size_t>(dynamic_smem_bytes)));
   oc.blocks_per_sm = blocks;
 
-  cudaDeviceProp prop{};
-  int dev = 0;
-  OPSLAB_CUDA_CHECK(cudaGetDevice(&dev));
-  OPSLAB_CUDA_CHECK(cudaGetDeviceProperties(&prop, dev));
-
-  oc.max_warps_per_sm = prop.maxThreadsPerMultiProcessor / prop.warpSize;
-  oc.active_warps_per_sm = blocks * (block_size / prop.warpSize);
+  const DeviceInfo& info = cached_device_info();
+  oc.max_warps_per_sm = info.max_threads_per_sm / info.warp_size;
+  oc.active_warps_per_sm = blocks * (block_size / info.warp_size);
   oc.occupancy = oc.max_warps_per_sm > 0
                      ? static_cast<double>(oc.active_warps_per_sm) / oc.max_warps_per_sm
                      : 0.0;
   return oc;
+}
+
+// -------------------------------------------------------------- grid 规模
+
+// 按"刚好填满机器"估算 grid 大小：SM 数 × 每 SM 能同时驻留的 block 数。
+//
+// grid-stride kernel 要的是"够用就好"的 grid，而不是"覆盖所有元素"的巨型 grid：
+//   * 每个 block 做多轮迭代，循环步进天然覆盖任意大的 n
+//   * 没有 grid 上限问题（2^31-1）
+//   * 也不存在"最后一个部分填充的 wave"造成的不均衡
+//
+// 注意这三点里只有前两条是**必然**成立的；第三条对大规模输入来说影响很小
+// （几万个 block 里最后一个 wave 只占百分之零点几）。所以 grid-stride 的
+// 主要价值是**功能性的**，性能上未必比"一线程一元素"更好 ——
+// 这一点要靠实测判断，不能想当然。
+inline int default_grid_size(int block_size) {
+  const DeviceInfo& info = cached_device_info();
+  const int b = block_size > 0 ? block_size : 1;
+  const int blocks_per_sm = info.max_threads_per_sm / b;
+  return info.sm_count * (blocks_per_sm > 0 ? blocks_per_sm : 1);
 }
 
 }  // namespace ops_lab
