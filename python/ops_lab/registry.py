@@ -63,6 +63,14 @@ __all__ = [
 
 _chapters_cache: list[ModuleType] | None = None
 
+# 不属于任何章节的基础设施符号。
+#
+# 它们同样会被导出，但既不是算子、也没有"变体"概念 —— 不测正确性、也不进阶梯表。
+# 一致性校验把它们算作"已登记"，否则会被误报成"导出了却没登记"。
+#
+# 写在这里而不是某个章节模块里，是因为它不隶属于任何一章。
+INFRASTRUCTURE_SYMBOLS = ("device_info",)
+
 
 # ----------------------------------------------------------------- 章节发现
 
@@ -232,7 +240,7 @@ def consistency_report() -> dict[str, list[str]]:
     """
     declared = declared_symbols()
     exported = exported_symbols()
-    accounted = declared | utility_symbols()
+    accounted = declared | utility_symbols() | set(INFRASTRUCTURE_SYMBOLS)
     return {
         "declared_not_exported": sorted(declared - exported),
         "exported_not_declared": sorted(exported - accounted),

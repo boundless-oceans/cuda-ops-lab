@@ -23,6 +23,9 @@ namespace ops_lab {
 void bind_execution(py::module_& m);
 void bind_elementwise(py::module_& m);
 
+// 不属于任何章节的基础设施绑定
+void bind_device(py::module_& m);
+
 }  // namespace ops_lab
 
 namespace {
@@ -78,6 +81,9 @@ PYBIND11_MODULE(ops_lab_ext, m) {
         "构建探针：返回扩展的编译期信息，用于确认加载的是正确的构建产物");
   m.def("list_kernels", &list_kernels,
         "列出所有已登记的导出算子（name/chapter/variant/description）");
+
+  // 基础设施（设备信息等）
+  ops_lab::bind_device(m);
 
   // 各章注册自己的绑定
   ops_lab::bind_execution(m);

@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -31,7 +29,7 @@ from ops_lab.envguard import sanitize_syspath  # noqa: E402
 
 _REMOVED = sanitize_syspath()
 
-from ops_lab import build_config  # noqa: E402
+from ops_lab import build_config, device_query  # noqa: E402
 
 OK, WARN, BAD = "OK", "WARN", "FAIL"
 
@@ -197,7 +195,7 @@ def _gpu_rows() -> tuple[list[tuple[str, str, str]], dict]:
     # 理论带宽与 machine balance：用 nvidia-smi 拿显存频率与位宽。
     # 注意：权威实现是 kernels/common/device.h（运行期从 cudaDeviceProp 读）；
     # 这里是在**编译之前**跑的近似版本，两者都基于同一公式，不会漂移太多。
-    bw = _theoretical_bandwidth_gbps()
+    bw = device_query.theoretical_bandwidth_gbps()
     if bw:
         info["bandwidth_gbps"] = bw
         rows.append(("理论带宽", f"~{bw:.0f} GB/s（显存频率 × 位宽 / 8 × 2）", OK))
@@ -222,41 +220,9 @@ def _gpu_rows() -> tuple[list[tuple[str, str, str]], dict]:
 
 
 def _nvidia_smi_query(field: str) -> str | None:
-    try:
-        proc = subprocess.run(
-            ["nvidia-smi", f"--query-gpu={field}", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    val = proc.stdout.strip().splitlines()[0].strip() if proc.stdout.strip() else ""
-    return val or None
-
-
-def _theoretical_bandwidth_gbps() -> float | None:
-    """显存频率(kHz) × 位宽(bit) / 8 × 2 → GB/s。"""
-    clock_mhz = _nvidia_smi_query("clocks.max.memory")
-    if not clock_mhz:
-        return None
-    width = None
-    try:
-        proc = subprocess.run(
-            ["nvidia-smi", "-q", "-d", "MEMORY"], capture_output=True, text=True, timeout=10
-        )
-        m = re.search(r"Bus Width\s*:\s*(\d+)\s*bit", proc.stdout)
-        if m:
-            width = int(m.group(1))
-    except (OSError, subprocess.SubprocessError):
-        pass
-    if not width:
-        return None
-    try:
-        clock_khz = float(clock_mhz) * 1000.0  # nvidia-smi 给的是 MHz
-    except ValueError:
-        return None
-    return clock_khz * 1000.0 * (width / 8.0) * 2.0 / 1e9
+    # 实现已抽到 ops_lab/device_query.py —— bench/run_bench.py 也要算 %峰值，
+    # 同一份查询与公式不该有两处手写。
+    return device_query.nvidia_smi_query(field)
 
 
 def check_compile_contract(cfg: build_config.BuildConfig, rep: Report, verbose: bool) -> None:
