@@ -37,6 +37,16 @@ VARIANT_NOTES = {
 #   1000003  大、奇数、非 2 的幂 —— 三个不利条件叠在一起
 EDGE_SHAPES = [(0,), (1,), (3,), (7,), (255,), (256,), (257,), (1024,), (1000003,)]
 
+# 基准专用形状 —— **必须和测试形状分开**。
+#
+# 原因：测试形状里最大的是 1000003，`add` 的工作集只有约 12 MB，而这块卡的
+# L2 缓存有几十 MB —— 整个工作集可能装进 L2，于是测出来的是 **L2 带宽**而不是
+# 显存带宽，数字会虚高到没有意义。
+#
+# 2^24 = 16.7M 个元素：add 的工作集约 201 MB，远超 L2；按 256 GB/s 估算，
+# 理论耗时约 786 µs，也足够长到让计时误差可以忽略。
+BENCH_SHAPES = [(1 << 24,)]
+
 
 def _variants(op: str) -> dict[str, str]:
     """一变体一符号：elementwise_<算子>_<变体>。"""
@@ -48,6 +58,7 @@ OPS = {
         "variants": _variants("add"),
         "reference": lambda x, y: x + y,
         "shapes": EDGE_SHAPES,
+        "bench_shapes": BENCH_SHAPES,
         # 读 x（4N）+ 读 y（4N）+ 写 out（4N）
         "bytes": lambda shape: shape[0] * 4 * 3,
         "flops": lambda shape: shape[0],
@@ -57,6 +68,7 @@ OPS = {
         "variants": _variants("relu"),
         "reference": lambda x: torch.clamp_min(x, 0.0),
         "shapes": EDGE_SHAPES,
+        "bench_shapes": BENCH_SHAPES,
         "bytes": lambda shape: shape[0] * 4 * 2,
         "flops": lambda shape: shape[0],
         "torch": lambda x: torch.relu(x),
@@ -65,6 +77,7 @@ OPS = {
         "variants": _variants("sigmoid"),
         "reference": lambda x: torch.sigmoid(x),
         "shapes": EDGE_SHAPES,
+        "bench_shapes": BENCH_SHAPES,
         "bytes": lambda shape: shape[0] * 4 * 2,
         # exp 的运算次数不计入：它既不是一个 FMA，也不是本算子的知识重点。
         # 这一列只用来判断"算术强度 vs machine balance"，见性能分析文档第 0 步。

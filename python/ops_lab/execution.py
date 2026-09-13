@@ -46,6 +46,9 @@ OPS = {
         "reference": lambda n: torch.arange(n, dtype=torch.int32),
         # n=0（空）、n=1（极小）、n=1024（常规）、n=2^20（大，且 v1 的 grid 还装得下）
         "shapes": [(0,), (1,), (1024,), (1 << 20,)],
+        # 基准形状必须**远大于 L2**，否则测的是缓存带宽而不是显存带宽。
+        # hello 只写 4N 字节，2^24 时输出 64 MB，够用。
+        "bench_shapes": [(1 << 24,)],
         # 纯写：只写 out[i] = i，输出 4 字节/元素
         "bytes": lambda shape: 4 * shape[0],
         "flops": lambda shape: shape[0],
@@ -67,6 +70,8 @@ OPS = {
         "reference": lambda x: x.clone(),
         # n=4 时 n4=1，只有 1 个 float4；n=1 时 n4=0，全靠标量尾巴
         "shapes": [(0,), (1,), (4,), (1024,), (1 << 20,)],
+        # 纯拷贝：读 4N + 写 4N。2^24 时工作集 134 MB，远超 L2
+        "bench_shapes": [(1 << 24,)],
         # 纯拷贝：读 4N + 写 4N
         "bytes": lambda shape: 4 * shape[0] * 2,
         "flops": lambda shape: 0,
