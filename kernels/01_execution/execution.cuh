@@ -35,7 +35,10 @@ void hello_v1_naive(int32_t* out, int64_t n, cudaStream_t stream);
 // v2_grid_stride —— grid 固定，kernel 内循环步进。
 //   与 v1 的差别**不是快慢，而是"grid 有没有上限"**。
 //   这也正是第 2 章 v3_grid_stride 存在的理由。
-//   grid_size <= 0 时由调用方（绑定层）按设备规模自动选择。
+//
+//   grid_size <= 0 表示"按设备规模自动选"（`default_grid_size`）。
+//   **这个约定由 launcher 自己实现**，调用方原样传值即可 —— 曾经它只在 Python
+//   绑定层实现，导致 native 线传 0 时直接抛异常。
 void hello_v2_grid_stride(int32_t* out, int64_t n, int block_size, int grid_size,
                           cudaStream_t stream);
 

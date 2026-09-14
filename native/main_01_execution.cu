@@ -15,7 +15,9 @@
 
 #include "kernels/01_execution/execution.cuh"
 
-int main(int argc, char** argv) {
+namespace {
+
+int run(int argc, char** argv) {
   using namespace ops_lab::execution;
   using namespace ops_lab::native;
 
@@ -79,4 +81,10 @@ int main(int argc, char** argv) {
   std::printf("      多个在飞访存请求可以补偿线程数不足）。\n");
   std::printf("      若实测带宽明显下降，说明 grid 太小、而非 occupancy 不够。\n");
   return 0;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  return ops_lab::native::run_guarded(run, argc, argv);
 }

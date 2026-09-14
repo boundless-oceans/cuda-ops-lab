@@ -70,7 +70,9 @@ void bench_unary_table(const char* title, const UnaryVariant* variants, int coun
 
 }  // namespace
 
-int main(int argc, char** argv) {
+namespace {
+
+int run(int argc, char** argv) {
   using namespace ops_lab::native;
 
   const NativeOptions opt = parse_options(argc, argv);
@@ -100,4 +102,10 @@ int main(int argc, char** argv) {
   std::printf("      例如 ncu --set full ./main_02_elementwise %lld 10\n",
               static_cast<long long>(opt.n));
   return 0;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  return ops_lab::native::run_guarded(run, argc, argv);
 }

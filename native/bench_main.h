@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -151,6 +152,24 @@ void bench_row(const char* label, int64_t bytes, LaunchFn&& launch, const Native
 inline double peak_gbps() {
   const DeviceInfo info = query_device();
   return info.mem_bandwidth_gbps;
+}
+
+// 统一兜住 C++ 异常。
+//
+// launcher 对非法参数会抛 `std::invalid_argument`（例如 grid_size 传了不合法的值）。
+// 不接住的话程序会 `terminate` + core dump —— 那是**最难查的失败形式**：看不到
+// 是哪一行、哪个变体出的问题。这里把它变成一行清晰的错误 + 退出码 1。
+//
+// 这个包装是被一次真实的崩溃逼出来的：native 起初给 hello_v2_grid_stride 传了
+// grid_size = 0，而"0 表示自动"当时只在 Python 绑定层实现，于是直接 terminate。
+inline int run_guarded(int (*body)(int, char**), int argc, char** argv) {
+  try {
+    return body(argc, argv);
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "\n[错误] %s\n", e.what());
+    std::fprintf(stderr, "（这是 kernel 层抛出的参数/调用错误，不是段错误）\n");
+    return 1;
+  }
 }
 
 }  // namespace native
