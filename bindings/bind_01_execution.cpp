@@ -37,11 +37,12 @@ torch::Tensor execution_hello_v2_grid_stride(int64_t n, int64_t block_size, int6
   if (n == 0) {
     return out;
   }
-  // grid_size = 0 表示自动：按设备规模选一个"刚好填满机器"的 grid。
-  const int grid = grid_size > 0 ? static_cast<int>(grid_size)
-                                 : ops_lab::default_grid_size(static_cast<int>(block_size));
+  // grid_size = 0 表示自动 —— 这个约定由 launcher 实现（见 hello.cu），
+  // 绑定层原样传下去。曾经绑定层自己算了这一步，结果同一个约定有两处实现，
+  // 而 native 线不知道这个约定、传 0 就直接抛了异常。
   ops_lab::execution::hello_v2_grid_stride(out.data_ptr<int32_t>(), n,
-                                           static_cast<int>(block_size), grid, current_stream());
+                                           static_cast<int>(block_size),
+                                           static_cast<int>(grid_size), current_stream());
   return out;
 }
 

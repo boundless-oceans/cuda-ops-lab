@@ -46,11 +46,18 @@ void hello_v2_grid_stride(int32_t* out, int64_t n, int block_size, int grid_size
   if (n <= 0) {
     return;
   }
-  if (block_size <= 0 || grid_size <= 0) {
-    throw std::invalid_argument("hello_v2_grid_stride: block_size 与 grid_size 必须为正数");
+  if (block_size <= 0) {
+    throw std::invalid_argument("hello_v2_grid_stride: block_size 必须为正数");
   }
+  // grid_size <= 0 表示"按设备规模自动选"。
+  //
+  // 这个约定**必须放在 launcher 里，不能放在绑定层** —— 曾经它只在 Python 绑定里
+  // 实现，于是 native 线传 0 就直接抛异常了（同一约定两个调用方，必有一个踩坑）。
+  // 现在两边都把这个值原样传进来，由这里统一决定。
+  const int grid = grid_size > 0 ? grid_size : default_grid_size(block_size);
+
   // 这里没有 grid 上限检查 —— 因为循环步进天然覆盖任意大的 n。
-  hello_v2_grid_stride_kernel<<<grid_size, block_size, 0, stream>>>(out, n);
+  hello_v2_grid_stride_kernel<<<grid, block_size, 0, stream>>>(out, n);
   OPSLAB_CUDA_CHECK_LAUNCH();
 }
 
