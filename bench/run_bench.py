@@ -165,7 +165,9 @@ def render_op(spec: dict, op: str, shape: tuple, measurements: list[Measurement]
     t_ms = theoretical_ms(nbytes, peak)
 
     lines = [f"### `{op}`  shape=`{tuple(shape)}`", ""]
-    lines.append(f"- 搬运 **{nbytes / 1e6:.1f} MB**（读 + 写），运算 {flops:,} FLOP，"
+    # 不写死"（读 + 写）"：hello 这类算子只写不读，写死就是错的。
+    # 读写比例由各章 README 说明；metadata 里的 bytes 是总搬运量。
+    lines.append(f"- 搬运 **{nbytes / 1e6:.1f} MB**，运算 {flops:,} FLOP，"
                  f"算术强度 **{intensity:.4f} FLOP/Byte**")
     if t_ms is not None:
         lines.append(
