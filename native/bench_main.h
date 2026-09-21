@@ -70,23 +70,39 @@ class DeviceBufferT {
 using DeviceBuffer = DeviceBufferT<float>;
 using DeviceBufferI32 = DeviceBufferT<int32_t>;
 
-// 用固定种子的线性同余在 host 侧造数据，再拷上显存。
+// 用固定种子的线性同余在 host 侧造数据。
 //
 // 为什么不写 device 端 RNG kernel：那是另一个话题，会喧宾夺主 ——
 // 这条线要看的是算子的访存性能，不是随机数生成。而且固定种子保证每次比较
 // 的都是同一组数据。
-inline void fill_pattern(DeviceBuffer& buf, uint32_t seed) {  if (buf.count() <= 0) {
-    return;
-  }
-  std::vector<float> host(static_cast<size_t>(buf.count()));
+//
+// 这里把"造 host 数组"单独暴露出来，是为了让 native 的算子能在本地算出参考值
+// 做自检（见 `native/main_03_reduction.cu`）：数据本来就是 host 造的，
+// 参考值就该在 host 上算 —— 不需要 torch，也不需要相信任何第三方实现。
+inline std::vector<float> make_host_pattern(int64_t count, uint32_t seed) {
+  std::vector<float> host(static_cast<size_t>(count > 0 ? count : 0));
   uint32_t state = seed;
   for (auto& v : host) {
     state = state * 1664525u + 1013904223u;
     // 取高 24 位映射到 [-1, 1) —— 避免全零/全同值，也避开非规格化数
     v = static_cast<float>(state >> 8) / 8388608.0f - 1.0f;
   }
+  return host;
+}
+
+inline void upload_pattern(DeviceBuffer& buf, const std::vector<float>& host) {
+  if (host.empty()) {
+    return;
+  }
   OPSLAB_CUDA_CHECK(cudaMemcpy(buf.get(), host.data(), host.size() * sizeof(float),
                                cudaMemcpyHostToDevice));
+}
+
+inline void fill_pattern(DeviceBuffer& buf, uint32_t seed) {
+  if (buf.count() <= 0) {
+    return;
+  }
+  upload_pattern(buf, make_host_pattern(buf.count(), seed));
 }
 
 // ------------------------------------------------------------------ 输出
@@ -109,12 +125,24 @@ inline NativeOptions parse_options(int argc, char** argv) {
   return opt;
 }
 
+// 没有 GPU 就打印统一提示并返回 true，调用方应当立刻退出（退出码 2 = 跳过）。
+//
+// 单独抽出来是因为**顺序很要紧**：`DeviceBuffer` 的构造函数就会 `cudaMalloc`，
+// 没有设备时那一步会抛异常。所以必须在分配显存**之前**就能问一句"有卡吗"，
+// 而不是等到 print_header 才发现 —— 那时已经晚了。
+inline bool require_device() {
+  if (device_count() != 0) {
+    return false;
+  }
+  std::fprintf(stderr, "看不到 CUDA 设备，无法运行。\n");
+  std::fprintf(stderr, "（这条线测的就是真实耗时，没有 GPU 就没有替代方案；"
+                       "离线检查请用 python tests/run_all.py）\n");
+  return true;
+}
+
 // 拿设备信息并打印表头。没有 GPU 时返回 false，调用方应当直接退出。
 inline bool print_header(const char* title, const NativeOptions& opt, int64_t bytes) {
-  if (device_count() == 0) {
-    std::fprintf(stderr, "看不到 CUDA 设备，无法运行。\n");
-    std::fprintf(stderr, "（这条线测的就是真实耗时，没有 GPU 就没有替代方案；"
-                         "离线检查请用 python tests/run_all.py）\n");
+  if (require_device()) {
     return false;
   }
 

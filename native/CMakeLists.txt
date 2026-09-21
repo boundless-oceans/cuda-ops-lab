@@ -69,3 +69,4 @@ endfunction()
 
 ops_lab_add_native(main_01_execution main_01_execution.cu)
 ops_lab_add_native(main_02_elementwise main_02_elementwise.cu)
+ops_lab_add_native(main_03_reduction main_03_reduction.cu)
