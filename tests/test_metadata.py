@@ -92,10 +92,15 @@ def test_reference_runs() -> None:
 
     这样比对时误差只来自 kernel 本身，不掺入"输入从 float64 降成 float32"
     的那一份量化误差 —— 否则容差就没法设了。
+
+    输出形状：默认与输入形状相同（elementwise 这类）。**归约这类输出比输入小的
+    算子**要在描述符里声明 `out_shape`（如 `lambda shape: (1,)`），否则这条检查
+    会把"正确的归约"误判成形状错误。
     """
     problems = []
     for chapter, op, spec in reg.iter_ops():
         n_in = reg.arity(spec)
+        out_shape_of = spec.get("out_shape")
         for shape in spec["shapes"]:
             shape = tuple(shape)
             gen = spec.get("gen")
@@ -113,9 +118,11 @@ def test_reference_runs() -> None:
                     f"{type(exc).__name__}: {exc}"
                 )
                 continue
-            if tuple(out.shape) != shape:
+            expected_shape = tuple(out_shape_of(shape)) if out_shape_of else shape
+            if tuple(out.shape) != expected_shape:
                 problems.append(
-                    f"{chapter}/{op} shape={shape} 参考实现输出形状 {tuple(out.shape)}，期望 {shape}"
+                    f"{chapter}/{op} shape={shape} 参考实现输出形状 {tuple(out.shape)}，"
+                    f"期望 {expected_shape}"
                 )
     assert_true(not problems, "; ".join(problems))
 
