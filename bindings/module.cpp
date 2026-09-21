@@ -22,6 +22,7 @@ namespace ops_lab {
 // 各章的绑定入口，实现在 bind_<chapter>.cpp 里。
 void bind_execution(py::module_& m);
 void bind_elementwise(py::module_& m);
+void bind_reduction(py::module_& m);
 
 // 不属于任何章节的基础设施绑定
 void bind_device(py::module_& m);
@@ -88,4 +89,5 @@ PYBIND11_MODULE(ops_lab_ext, m) {
   // 各章注册自己的绑定
   ops_lab::bind_execution(m);
   ops_lab::bind_elementwise(m);
+  ops_lab::bind_reduction(m);
 }

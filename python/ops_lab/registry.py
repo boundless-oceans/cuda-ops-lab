@@ -23,7 +23,10 @@
             "variants":  {变体标签: 符号名 或 {"symbol":..., "args":[...]}},
             "reference": 参考实现，跑在 float64 上，签名与 kernel 的输入一致,
             "shapes":    [形状元组, ...]  必须含 0 / 1 / 非 2 的幂 / 跨 block 边界,
-            "gen":       可选。自定义输入生成器 gen(shape, device) -> tuple
+            "out_shape": 可选。shape -> 输出形状。省略时认为输出与输入同形状；
+                         **归约这类输出比输入小的算子必须声明**，否则
+                         `test_metadata.test_reference_runs` 会把正确的实现误判成错
+            "gen":       可选。自定义输入生成器 gen(shape) -> tuple
             "bytes":     shape -> 搬运字节数（读 + 写）
             "flops":     shape -> 浮点运算次数
             "rtol"/"atol": 判据容差（默认 1e-5 / 1e-6）
