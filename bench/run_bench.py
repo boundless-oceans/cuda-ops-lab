@@ -50,6 +50,21 @@ DEFAULT_ITERS = 100
 DEFAULT_RESULT_DIR = _REPO_ROOT / "bench" / "results"
 
 
+# ============================================================ 退出码是个坑
+#
+# 本仓库约定 **退出码 2 = "跳过"**（`scripts/run_all.sh` 靠它区分"没 GPU"和"失败"）。
+# 而 argparse 遇到**用法错误**（参数拼错、缺值）时默认也是 `exit(2)` ——
+# 于是 `run_bench.py --chaptres reduction` 这种手滑会被 run_all.sh 汇报成
+# "SKIP"，看起来和"这台机器没显卡"一模一样：**基准根本没跑，却没有任何失败**。
+#
+# 实测确认过：拼错一个字母 → 退出码 2。所以这里把用法错误的退出码改成 1，
+# 让"跳过"在结构上只可能来自"真的没有 GPU"。
+class _StrictParser(argparse.ArgumentParser):
+    def error(self, message: str):  # type: ignore[override]
+        self.print_usage(sys.stderr)
+        self.exit(1, f"{self.prog}: 参数错误：{message}\n")
+
+
 # ============================================================ 纯函数（可离线测试）
 
 
@@ -226,7 +241,10 @@ def render_chapter(chapter: str, blocks: list[str], peak: float | None,
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="cuda-ops-lab 基准")
+    # allow_abbrev=False：不接受 `--chapter` 这种"前缀碰巧唯一"的缩写。
+    # 缩写会随选项增删而改变行为（今天能跑、明天变成歧义错误），而基准脚本的
+    # 调用方是文档和 shell 脚本 —— 那里的命令必须是确定的。
+    ap = _StrictParser(description="cuda-ops-lab 基准", allow_abbrev=False)
     ap.add_argument("--chapters", nargs="*", default=None,
                     help="只跑章节名包含这些词的（如 execution elementwise）")
     ap.add_argument("--warmup", type=int, default=DEFAULT_WARMUP)

@@ -82,7 +82,7 @@ python python/ops_lab/_build.py -v
 python tests/run_all.py
 
 # 5) 基准：生成优化阶梯表（写到 bench/results/，该目录不入库）
-python bench/run_bench.py --chapter elementwise
+python bench/run_bench.py --chapters elementwise
 
 # 6) 静态资源：寄存器 / spill / 共享内存（不需要 GPU）
 python scripts/resource_report.py
