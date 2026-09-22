@@ -20,6 +20,7 @@
 
 #include <cuda_runtime.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -103,6 +104,40 @@ inline void fill_pattern(DeviceBuffer& buf, uint32_t seed) {
     return;
   }
   upload_pattern(buf, make_host_pattern(buf.count(), seed));
+}
+
+// ------------------------------------------------------------------ 预热
+
+// 在计时之前把 GPU 推到**时钟稳态**。这一步是必需的，不是礼貌：
+//
+// 实测（2026-09）这台机器冷态显存时钟 **7001 MHz**、稳态 **8001 MHz**，差 **14%**；
+// 而理论峰值带宽是按额定 8001 MHz 算的（256.0 GB/s）。不预热，最先测的几个变体
+// 就会被凭空打上"只有 83% 峰值"的标签 —— 它其实是 95.6%，只是分母用了当时
+// 达不到的时钟。第 3 章就是被这个坑绊了一次（两条测量路径差 14%）。
+//
+// 为什么这里用**固定时长**，而 Python 侧（`ops_lab/clock_state.py`）是"读时钟
+// 直到到顶"：C++ 侧没有便宜的"当前显存时钟"查询 —— `cudaDeviceProp.memoryClockRate`
+// 给的是**额定值**而不是当前值。所以这条线的分工是"编译得起来、能喂给 ncu、
+// 结果自检"，权威数字由 Python 线给出（两者曾在 0.4% 内互相印证）。
+template <typename LaunchFn>
+void steady_state_warmup(LaunchFn&& launch, double seconds = 2.0) {
+  const DeviceInfo info = query_device();
+  std::printf("[warmup] 额定显存时钟 %d MHz（理论峰值 %.1f GB/s 按它算）\n",
+              info.mem_clock_khz / 1000, info.mem_bandwidth_gbps);
+
+  const auto t0 = std::chrono::steady_clock::now();
+  long long rounds = 0;
+  while (true) {
+    launch();
+    ++rounds;
+    const std::chrono::duration<double> dt = std::chrono::steady_clock::now() - t0;
+    if (dt.count() >= seconds) {
+      break;
+    }
+  }
+  OPSLAB_CUDA_CHECK(cudaDeviceSynchronize());
+  std::printf("[warmup] 已预热 %.1f s（%lld 次启动）—— 冷机开测会低估带宽约 14%%\n\n",
+              seconds, rounds);
 }
 
 // ------------------------------------------------------------------ 输出

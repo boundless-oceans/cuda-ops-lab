@@ -77,9 +77,7 @@ int run(int argc, char** argv) {
 
   const NativeOptions opt = parse_options(argc, argv);
 
-  // ------ add：读 x + 读 y + 写 out = 12 字节/元素 ------
-  const int64_t add_bytes = opt.n * 12;
-  if (!print_header("02_elementwise / add", opt, add_bytes)) {
+  if (require_device()) {
     return 2;
   }
   const double peak = peak_gbps();
@@ -89,6 +87,18 @@ int run(int argc, char** argv) {
   DeviceBuffer out(opt.n);
   fill_pattern(x, 1);
   fill_pattern(y, 2);
+
+  // 计时之前把 GPU 推到时钟稳态（顺序：必须在 print_header 之前，否则预热信息
+  // 会插进表头和数据行中间）
+  steady_state_warmup([&] { ops_lab::elementwise::add_v1_naive(x.get(), y.get(), out.get(),
+                                                              opt.n, 0); },
+                      2.0);
+
+  // ------ add：读 x + 读 y + 写 out = 12 字节/元素 ------
+  const int64_t add_bytes = opt.n * 12;
+  if (!print_header("02_elementwise / add", opt, add_bytes)) {
+    return 2;
+  }
 
   for (const auto& v : kAddVariants) {
     bench_row(v.label, add_bytes, [&] { v.fn(x.get(), y.get(), out.get(), opt.n, 0); }, opt, peak);

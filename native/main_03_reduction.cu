@@ -156,6 +156,14 @@ int run(int argc, char** argv) {
   }
 
   const double peak = peak_gbps();
+
+  // 计时之前把 GPU 推到时钟稳态：冷态显存时钟 7001 MHz、稳态 8001 MHz，差 14%，
+  // 而理论峰值是按额定的 8001 算的。没有这一步，先测的变体会被低估约 14%
+  // （第 3 章的两条测量路径就是这么差出 14% 来的）。
+  // 用 v1_naive 当预热负载：它就是"打满带宽"的那一档，与真实测量同型。
+  steady_state_warmup([&] { ops_lab::reduction::sum_v1_naive(x.get(), out.get(), opt.n, 0); },
+                      2.0);
+
   bench_table("03_reduction / sum", kSumVariants, x.get(), out.get(), opt.n, opt, peak);
   bench_table("03_reduction / max", kMaxVariants, x.get(), out.get(), opt.n, opt, peak);
 
