@@ -153,12 +153,18 @@ def _rotate(items: list, offset: int) -> list:
 
 
 def measure_op(spec: dict, refs: list[registry.VariantRef], shape: tuple, rounds: int,
-               warmup: int, iters: int,
-               peak: float | None) -> tuple[list[Measurement], Measurement | None]:
+               warmup: int, iters: int, peak: float | None,
+               clock_samples: list[dict] | None = None) -> tuple[list[Measurement],
+                                                                 Measurement | None]:
     """交错测量一个算子的全部变体 + torch 对照。
 
     返回 `(变体表, 基线)`。每个变体的 median 是"各轮 median 的中位数"，
     极差是各轮 median 的最大差 —— 后者是这个数字可不可信的唯一线索。
+
+    `clock_samples` 非空时，每轮结束采一次时钟并追加进去。**这是为了留下证据**：
+    表头要报的是"产出这些数字时机器处于什么状态"，而不是"预热那一刻的状态"。
+    （第一版只报预热采样，结果产出了"表头说没到额定、表里却算出 93% 峰值"
+    这种自相矛盾的文件 —— 93% 只有在额定时钟下才可能出现。）
     """
     device = torch.device("cuda")
     inputs = _make_inputs(spec, shape, device)  # 一份数据，所有变体、所有轮共用
@@ -173,6 +179,10 @@ def measure_op(spec: dict, refs: list[registry.VariantRef], shape: tuple, rounds
             per_round[ref.label].append(_time(lambda: registry.call(ref, *inputs), warmup, iters))
         if baseline_fn is not None:
             baseline_rounds.append(_time(lambda: baseline_fn(*inputs), warmup, iters))
+        if clock_samples is not None:
+            state = clock_state.query_state()
+            if state is not None:
+                clock_samples.append(state)
 
     notes = registry.variant_notes(refs[0].chapter) if refs else {}
 
@@ -257,19 +267,21 @@ def render_op(spec: dict, op: str, shape: tuple, measurements: list[Measurement]
 
 
 def render_chapter(chapter: str, blocks: list[str], peak: float | None,
-                   device_name: str | None, clock_line: str, clock_ok: bool | None,
+                   device_name: str | None, clock_lines: list[str], clock_ok: bool | None,
                    rounds: int, warmup: int, iters: int) -> str:
     peak_text = f"{peak:.1f} GB/s" if peak else "**未知**"
     lines = [f"# {chapter} 优化阶梯表", ""]
     lines.append(f"- 设备：{device_name or '未知'}")
     lines.append(f"- 理论峰值带宽：{peak_text}")
-    # 时钟必须写进表头：它是"这一列数字可不可信"的唯一线索
-    lines.append(f"- **{clock_line}**")
+    # 时钟必须写进表头：它是"这一列数字可不可信"的唯一线索。
+    # 分成"预热"和"测时"两行 —— 前者说明准备得怎么样，后者才是**产出这些数字时**
+    # 机器的状态。只报前者会产出自相矛盾的文件（见 measure_op 的注释）。
+    lines.extend(f"- {line}" for line in clock_lines)
     lines.append(f"- 计时：{rounds} 轮交错（轮间起始变体错开），每轮 warmup {warmup} + "
                  f"{iters} 次独立 record/sync；取各轮 median 的中位数")
     if clock_ok is False:
         lines.append("")
-        lines.append("> ⚠️ **显存时钟没有到额定值** —— %峰值 那一列的分母是按额定时钟算的，"
+        lines.append("> ⚠️ **测时显存时钟没有到额定值** —— %峰值 那一列的分母是按额定时钟算的，"
                      "因此会**系统性偏低**。这组数字不要直接采信："
                      "先把机器跑热（或关掉其它占用 GPU 的进程）再重测。")
     lines.append("")
@@ -338,11 +350,13 @@ def main() -> int:
     name = device_query.device_name() or torch.cuda.get_device_name(0)
 
     # ---- 时钟稳态预热：不做这一步，最先测的变体会被凭空打上"83%" ----
+    clock_samples: list[dict] = []
     if args.no_warmup:
         state = clock_state.query_state() or {}
-        clock_ok = clock_state.at_rated_memory_clock(state) if state else None
-        clock_line = clock_state.describe(dict(state, reached=clock_ok)) + "（**未预热**）"
-        print(f"[bench] 跳过了稳态预热：{clock_line}", file=sys.stderr)
+        reached = clock_state.at_rated_memory_clock(state) if state else None
+        warmup_line = "预热：**已跳过**（--no-warmup）· " + clock_state.describe(
+            dict(state, reached=reached))
+        print(f"[bench] 跳过了稳态预热：{warmup_line}", file=sys.stderr)
     else:
         load = _steady_state_load(args.chapters)
         if load is None:
@@ -350,11 +364,11 @@ def main() -> int:
             return 1
         print("[bench] 预热到时钟稳态 ……", file=sys.stderr)
         state = clock_state.steady_state(load)
-        clock_ok = state.get("reached")
-        clock_line = clock_state.describe(state)
-        print(f"[bench] {clock_line}", file=sys.stderr)
-        if clock_ok is False:
-            print("警告：显存时钟仍未到额定值，下面的 %峰值 会系统性偏低。", file=sys.stderr)
+        warmup_line = "预热：" + clock_state.describe(state)
+        print(f"[bench] {warmup_line}", file=sys.stderr)
+        if state.get("reached") is False:
+            print("警告：预热结束后显存时钟仍未到额定值；测量期间还会再采样确认。",
+                  file=sys.stderr)
 
     # 按章节归拢
     per_chapter: dict[str, list[str]] = {}
@@ -370,7 +384,7 @@ def main() -> int:
             print(f"[bench] {chapter}/{op} shape={shape} ...", file=sys.stderr)
 
             measurements, baseline = measure_op(
-                spec, refs, shape, args.rounds, args.warmup, args.iters, peak)
+                spec, refs, shape, args.rounds, args.warmup, args.iters, peak, clock_samples)
             per_chapter.setdefault(chapter, []).append(
                 render_op(spec, op, shape, measurements, baseline, peak)
             )
@@ -379,8 +393,16 @@ def main() -> int:
         print("没有匹配的章节", file=sys.stderr)
         return 1
 
+    # 表头报**测时**的时钟，而不是预热那一刻的：读者关心的是"产出这些数字时
+    # 机器处于什么状态"。只要有一轮采样掉到额定以下，就按"不可信"警告。
+    clock_ok = clock_state.samples_at_rated(clock_samples)
+    if clock_ok is None:
+        clock_ok = state.get("reached") if not args.no_warmup else reached
+    clock_lines = [warmup_line, clock_state.describe_samples(clock_samples)]
+    print(f"[bench] {clock_lines[1]}", file=sys.stderr)
+
     for chapter, blocks in per_chapter.items():
-        text = render_chapter(chapter, blocks, peak, name, clock_line, clock_ok,
+        text = render_chapter(chapter, blocks, peak, name, clock_lines, clock_ok,
                               args.rounds, args.warmup, args.iters)
         if not args.quiet:
             print()
