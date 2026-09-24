@@ -23,6 +23,17 @@ int run(int argc, char** argv) {
 
   const NativeOptions opt = parse_options(argc, argv);
 
+  // 先确认有卡：DeviceBuffer 的构造函数就会 cudaMalloc，没卡时那一步会抛异常
+  if (require_device()) {
+    return 2;
+  }
+  const double peak = peak_gbps();
+
+  // 计时之前把 GPU 推到时钟稳态。顺序很要紧：预热必须发生在 print_header 之前，
+  // 否则那两行预热信息会插进表头和数据行中间，把表读乱。
+  DeviceBufferI32 out(opt.n);
+  steady_state_warmup([&] { hello_v1_naive(out.get(), opt.n, 0); }, 2.0);
+
   // ---------------------------------------------------------------- 实验一
   // hello 只写：out[i] = i，4 字节/元素。
   // 注意输出是 **int32**（它算的是索引），不是 float —— 所以用 I32 缓冲。
@@ -30,9 +41,7 @@ int run(int argc, char** argv) {
   if (!print_header("01_execution / hello", opt, hello_bytes)) {
     return 2;
   }
-  const double peak = peak_gbps();
 
-  DeviceBufferI32 out(opt.n);
   bench_row("v1_naive", hello_bytes, [&] { hello_v1_naive(out.get(), opt.n, 0); }, opt, peak);
   bench_row(
       "v2_grid_stride", hello_bytes,

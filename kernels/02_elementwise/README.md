@@ -69,7 +69,7 @@
 | `v4_vectorized` | 226.6 | 88.5% | 226.4 | 88.4% |
 | `torch` | 227.9 | 89.0% | 228.0 | 89.0% |
 
-> 复现：`python bench/run_bench.py --chapter elementwise`
+> 复现：`python bench/run_bench.py --chapters elementwise`
 > （原始输出在 `bench/results/02_elementwise.md`，该目录已 gitignore）
 
 ### 这张表推翻了我的预测，而且推翻得很彻底

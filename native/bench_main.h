@@ -20,6 +20,7 @@
 
 #include <cuda_runtime.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -70,23 +71,73 @@ class DeviceBufferT {
 using DeviceBuffer = DeviceBufferT<float>;
 using DeviceBufferI32 = DeviceBufferT<int32_t>;
 
-// 用固定种子的线性同余在 host 侧造数据，再拷上显存。
+// 用固定种子的线性同余在 host 侧造数据。
 //
 // 为什么不写 device 端 RNG kernel：那是另一个话题，会喧宾夺主 ——
 // 这条线要看的是算子的访存性能，不是随机数生成。而且固定种子保证每次比较
 // 的都是同一组数据。
-inline void fill_pattern(DeviceBuffer& buf, uint32_t seed) {  if (buf.count() <= 0) {
-    return;
-  }
-  std::vector<float> host(static_cast<size_t>(buf.count()));
+//
+// 这里把"造 host 数组"单独暴露出来，是为了让 native 的算子能在本地算出参考值
+// 做自检（见 `native/main_03_reduction.cu`）：数据本来就是 host 造的，
+// 参考值就该在 host 上算 —— 不需要 torch，也不需要相信任何第三方实现。
+inline std::vector<float> make_host_pattern(int64_t count, uint32_t seed) {
+  std::vector<float> host(static_cast<size_t>(count > 0 ? count : 0));
   uint32_t state = seed;
   for (auto& v : host) {
     state = state * 1664525u + 1013904223u;
     // 取高 24 位映射到 [-1, 1) —— 避免全零/全同值，也避开非规格化数
     v = static_cast<float>(state >> 8) / 8388608.0f - 1.0f;
   }
+  return host;
+}
+
+inline void upload_pattern(DeviceBuffer& buf, const std::vector<float>& host) {
+  if (host.empty()) {
+    return;
+  }
   OPSLAB_CUDA_CHECK(cudaMemcpy(buf.get(), host.data(), host.size() * sizeof(float),
                                cudaMemcpyHostToDevice));
+}
+
+inline void fill_pattern(DeviceBuffer& buf, uint32_t seed) {
+  if (buf.count() <= 0) {
+    return;
+  }
+  upload_pattern(buf, make_host_pattern(buf.count(), seed));
+}
+
+// ------------------------------------------------------------------ 预热
+
+// 在计时之前把 GPU 推到**时钟稳态**。这一步是必需的，不是礼貌：
+//
+// 实测（2026-09）这台机器冷态显存时钟 **7001 MHz**、稳态 **8001 MHz**，差 **14%**；
+// 而理论峰值带宽是按额定 8001 MHz 算的（256.0 GB/s）。不预热，最先测的几个变体
+// 就会被凭空打上"只有 83% 峰值"的标签 —— 它其实是 95.6%，只是分母用了当时
+// 达不到的时钟。第 3 章就是被这个坑绊了一次（两条测量路径差 14%）。
+//
+// 为什么这里用**固定时长**，而 Python 侧（`ops_lab/clock_state.py`）是"读时钟
+// 直到到顶"：C++ 侧没有便宜的"当前显存时钟"查询 —— `cudaDeviceProp.memoryClockRate`
+// 给的是**额定值**而不是当前值。所以这条线的分工是"编译得起来、能喂给 ncu、
+// 结果自检"，权威数字由 Python 线给出（两者曾在 0.4% 内互相印证）。
+template <typename LaunchFn>
+void steady_state_warmup(LaunchFn&& launch, double seconds = 2.0) {
+  const DeviceInfo info = query_device();
+  std::printf("[warmup] 额定显存时钟 %d MHz（理论峰值 %.1f GB/s 按它算）\n",
+              info.mem_clock_khz / 1000, info.mem_bandwidth_gbps);
+
+  const auto t0 = std::chrono::steady_clock::now();
+  long long rounds = 0;
+  while (true) {
+    launch();
+    ++rounds;
+    const std::chrono::duration<double> dt = std::chrono::steady_clock::now() - t0;
+    if (dt.count() >= seconds) {
+      break;
+    }
+  }
+  OPSLAB_CUDA_CHECK(cudaDeviceSynchronize());
+  std::printf("[warmup] 已预热 %.1f s（%lld 次启动）—— 冷机开测会低估带宽约 14%%\n\n",
+              seconds, rounds);
 }
 
 // ------------------------------------------------------------------ 输出
@@ -109,12 +160,24 @@ inline NativeOptions parse_options(int argc, char** argv) {
   return opt;
 }
 
+// 没有 GPU 就打印统一提示并返回 true，调用方应当立刻退出（退出码 2 = 跳过）。
+//
+// 单独抽出来是因为**顺序很要紧**：`DeviceBuffer` 的构造函数就会 `cudaMalloc`，
+// 没有设备时那一步会抛异常。所以必须在分配显存**之前**就能问一句"有卡吗"，
+// 而不是等到 print_header 才发现 —— 那时已经晚了。
+inline bool require_device() {
+  if (device_count() != 0) {
+    return false;
+  }
+  std::fprintf(stderr, "看不到 CUDA 设备，无法运行。\n");
+  std::fprintf(stderr, "（这条线测的就是真实耗时，没有 GPU 就没有替代方案；"
+                       "离线检查请用 python tests/run_all.py）\n");
+  return true;
+}
+
 // 拿设备信息并打印表头。没有 GPU 时返回 false，调用方应当直接退出。
 inline bool print_header(const char* title, const NativeOptions& opt, int64_t bytes) {
-  if (device_count() == 0) {
-    std::fprintf(stderr, "看不到 CUDA 设备，无法运行。\n");
-    std::fprintf(stderr, "（这条线测的就是真实耗时，没有 GPU 就没有替代方案；"
-                         "离线检查请用 python tests/run_all.py）\n");
+  if (require_device()) {
     return false;
   }
 

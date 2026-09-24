@@ -6,6 +6,7 @@
 #     bash scripts/run_all.sh                    # 全部（基准需要 GPU）
 #     bash scripts/run_all.sh --quick            # 跳过需要 GPU 的步骤
 #     bash scripts/run_all.sh --chapter elementwise
+#     bash scripts/run_all.sh --chapters reduction    # 同义（两个写法都收）
 #     bash scripts/run_all.sh --bench-only
 #
 # 设计说明：
@@ -26,7 +27,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --quick)      QUICK=1; shift ;;
     --bench-only) BENCH_ONLY=1; shift ;;
-    --chapter)    CHAPTER="${2:-}"; shift 2 ;;
+    --chapter|--chapters) CHAPTER="${2:-}"; shift 2 ;;
     -h|--help)    sed -n '2,20p' "$0"; exit 0 ;;
     *)            echo "未知参数：$1（-h 看用法）" >&2; exit 1 ;;
   esac
@@ -102,7 +103,9 @@ fi
 
 if [[ $QUICK -eq 0 ]]; then
   bench_args=()
-  [[ -n "$CHAPTER" ]] && bench_args+=(--chapter "$CHAPTER")
+  # 注意这里必须是 --chapters（复数）：run_bench.py 关了 allow_abbrev，
+  # 写成 --chapter 会直接用法错误退出 1，整步报 FAIL。
+  [[ -n "$CHAPTER" ]] && bench_args+=(--chapters "$CHAPTER")
   run_step "基准（需要 GPU）" python bench/run_bench.py "${bench_args[@]}"
 else
   echo "(--quick：跳过基准)"

@@ -50,7 +50,7 @@
 | `probe_smem32k` | 32 KB | ~50% | 593.9 | 226.0 | 88.3% |
 | **`probe_smem48k`** | 48 KB | **~33%** | **564.2** | **237.9** | **92.9%** |
 
-> 复现：`python bench/run_bench.py --chapter execution`
+> 复现：`python bench/run_bench.py --chapters execution`
 > 或纯 CUDA：`./build/native/main_01_execution`
 
 （occupancy 那一列是理论值，`./build/native/main_01_execution` 会打印实测值。）
