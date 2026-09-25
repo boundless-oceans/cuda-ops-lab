@@ -83,6 +83,34 @@ def test_bytes_flops_callable() -> None:
                     continue
                 if not isinstance(value, (int, float)) or value < 0:
                     problems.append(f"{chapter}/{op} {key}{tuple(shape)} = {value!r} 不合法")
+
+            # **逐变体的 bytes 覆盖也要查。**
+            #
+            # 这一段是被第 4 章逼出来的：那里允许在 variants 声明里覆盖 bytes
+            # （三段式 scan 读两遍输入 = 12N、单趟 = 8N）。这类 lambda 写错了
+            # （拼错变量、没处理 n=0）只会在**跑基准时**炸，而基准需要 GPU ——
+            # 于是错误能潜伏很久。离线检查是唯一能挡住它的地方。
+            for label in spec["variants"]:
+                try:
+                    value = reg.variant_bytes(spec, label, shape)
+                except Exception as exc:  # noqa: BLE001
+                    problems.append(
+                        f"{chapter}/{op}/{label} 的 bytes{tuple(shape)} 抛异常 {exc!r}")
+                    continue
+                if not isinstance(value, (int, float)) or value < 0:
+                    problems.append(
+                        f"{chapter}/{op}/{label} 的 bytes{tuple(shape)} = {value!r} 不合法")
+
+        # 变体的实际 bytes 不允许**小于**理想流量 —— 理想是下限，
+        # 比它小说明有人把"理想"和"实际"两个方向搞反了
+        biggest = max(spec["shapes"], key=lambda s: s[0])
+        ideal = spec["bytes"](biggest)
+        for label in spec["variants"]:
+            actual = reg.variant_bytes(spec, label, biggest)
+            if actual < ideal:
+                problems.append(
+                    f"{chapter}/{op}/{label}: 实际搬运 {actual} < 理想搬运 {ideal}"
+                    f"（理想是下限，不可能更少）")
     assert_true(not problems, "; ".join(problems))
 
 

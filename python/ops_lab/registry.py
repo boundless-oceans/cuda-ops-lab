@@ -57,6 +57,8 @@ __all__ = [
     "iter_variants",
     "iter_ops",
     "call",
+    "arity",
+    "variant_bytes",
     "declared_symbols",
     "exported_symbols",
     "bound_arity",
@@ -174,6 +176,26 @@ def call(ref: VariantRef, *inputs: Any) -> Any:
 def arity(spec: dict) -> int:
     """算子的输入个数，从参考实现的签名推断（避免多写一个字段、多一处不同步）。"""
     return len(inspect.signature(spec["reference"]).parameters)
+
+
+def variant_bytes(spec: dict, label: str, shape) -> int:
+    """某个**变体**在某个形状下实际搬运的字节数。
+
+    默认取算子级的 `spec["bytes"]`；变体声明可以直接覆盖它：
+
+        "variants": {"v0": {"symbol": "...", "bytes": lambda shape: 12 * shape[0]}}
+
+    为什么需要覆盖（第 4 章踩出来的）：三段式 scan **读两遍输入**（12N），
+    单趟实现只读一遍（8N）。若用同一个分母去算 `%峰值`，等于拿两把尺子量东西 ——
+    v1/v2 会显得只有 62%，而它们其实把自己的 12N 用到了 93%。
+
+    算子级的 `spec["bytes"]` 是**理想**流量，仍然用来算表头的"理论最短耗时"
+    和"实际搬运"那一列的比较基准。
+    """
+    value = spec["variants"][label]
+    if isinstance(value, dict) and "bytes" in value:
+        return int(value["bytes"](shape))
+    return int(spec["bytes"](shape))
 
 
 # ------------------------------------------------------- 符号一致性校验

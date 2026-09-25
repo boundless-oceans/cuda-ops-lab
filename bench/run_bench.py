@@ -112,6 +112,7 @@ class Measurement:
     is_baseline: bool = False
     rounds: int = 1
     spread_ms: float = 0.0  # 各轮 median 的极差 —— 给读者看的稳定性指标
+    nbytes: int = 0         # 这个变体**实际**搬了多少字节（各变体可能不同，见 registry.variant_bytes）
 
 
 def _make_inputs(spec: dict, shape: tuple, device: torch.device) -> tuple:
@@ -168,7 +169,6 @@ def measure_op(spec: dict, refs: list[registry.VariantRef], shape: tuple, rounds
     """
     device = torch.device("cuda")
     inputs = _make_inputs(spec, shape, device)  # 一份数据，所有变体、所有轮共用
-    nbytes = spec["bytes"](shape)
 
     per_round: dict[str, list[float]] = {ref.label: [] for ref in refs}
     baseline_rounds: list[float] = []
@@ -186,7 +186,8 @@ def measure_op(spec: dict, refs: list[registry.VariantRef], shape: tuple, rounds
 
     notes = registry.variant_notes(refs[0].chapter) if refs else {}
 
-    def make(label: str, note: str, values: list[float], baseline: bool = False) -> Measurement:
+    def make(label: str, note: str, values: list[float], nbytes: int,
+             baseline: bool = False) -> Measurement:
         med = statistics.median(values)
         gbps = gbps_from(nbytes, med)
         return Measurement(
@@ -199,13 +200,21 @@ def measure_op(spec: dict, refs: list[registry.VariantRef], shape: tuple, rounds
             is_baseline=baseline,
             rounds=rounds,
             spread_ms=max(values) - min(values),
+            nbytes=nbytes,
         )
 
-    measurements = [make(ref.label, notes.get(ref.label, ""), per_round[ref.label])
-                    for ref in refs]
+    # **逐变体的实际搬运量**：默认是算子级的理想值，变体可以覆盖
+    # （scan 的三段式读两遍输入 → 12N；见 registry.variant_bytes 的注释）
+    measurements = [
+        make(ref.label, notes.get(ref.label, ""), per_round[ref.label],
+             registry.variant_bytes(spec, ref.label, shape))
+        for ref in refs
+    ]
     baseline = None
     if baseline_rounds:
-        baseline = make("torch（基线）", "torch 的对应实现", baseline_rounds, baseline=True)
+        # torch 基线的流量按理想值算（它也是读一遍写一遍）
+        baseline = make("torch（基线）", "torch 的对应实现", baseline_rounds,
+                        spec["bytes"](shape), baseline=True)
     return measurements, baseline
 
 
@@ -214,45 +223,63 @@ def measure_op(spec: dict, refs: list[registry.VariantRef], shape: tuple, rounds
 
 def render_op(spec: dict, op: str, shape: tuple, measurements: list[Measurement],
               baseline: Measurement | None, peak: float | None) -> str:
-    nbytes = spec["bytes"](shape)
+    nbytes_ideal = spec["bytes"](shape)
     flops = spec["flops"](shape)
-    intensity = (flops / nbytes) if nbytes else 0.0
-    t_ms = theoretical_ms(nbytes, peak)
+    intensity = (flops / nbytes_ideal) if nbytes_ideal else 0.0
+    t_ms = theoretical_ms(nbytes_ideal, peak)
+
+    # 只有"各变体的实际搬运量不同"时才加这一列 —— 否则它在表里是个常数，纯噪声。
+    # （第 4 章 scan 需要用：三段式 12N、单趟 8N。前几章都是同一个值。）
+    show_bytes = len({m.nbytes for m in measurements}) > 1
 
     lines = [f"### `{op}`  shape=`{tuple(shape)}`", ""]
     # 不写死"（读 + 写）"：hello 这类算子只写不读，写死就是错的。
     # 读写比例由各章 README 说明；metadata 里的 bytes 是总搬运量。
-    lines.append(f"- 搬运 **{nbytes / 1e6:.1f} MB**，运算 {flops:,} FLOP，"
+    lines.append(f"- 理想搬运 **{nbytes_ideal / 1e6:.1f} MB**，运算 {flops:,} FLOP，"
                  f"算术强度 **{intensity:.4f} FLOP/Byte**")
+    if show_bytes:
+        lines.append("- **实际搬运**一列是各变体真正搬的字节数（`%峰值` 按各自的实际值算）；"
+                     "理想搬运是不管怎么实现都躲不掉的那一份")
     if t_ms is not None:
         lines.append(
-            f"- 理论最短耗时 = {nbytes / 1e6:.1f} MB ÷ {peak:.1f} GB/s = **{t_ms * 1e3:.1f} µs**"
+            f"- 理论最短耗时 = {nbytes_ideal / 1e6:.1f} MB ÷ {peak:.1f} GB/s = "
+            f"**{t_ms * 1e3:.1f} µs**"
         )
     else:
         lines.append("- 理论最短耗时：**未知**（拿不到峰值带宽，用 `--peak-gbps` 手动指定）")
     lines.append("")
-    lines.append("| 变体 | 思路 | median (µs) | 轮间极差 (µs) | GB/s | %峰值 | 相比上一级 |")
-    lines.append("|---|---|---|---|---|---|---|")
+    if show_bytes:
+        lines.append("| 变体 | 思路 | median (µs) | 轮间极差 (µs) | 实际搬运 | GB/s | %峰值 | 相比上一级 |")
+        lines.append("|---|---|---|---|---|---|---|---|")
+    else:
+        lines.append("| 变体 | 思路 | median (µs) | 轮间极差 (µs) | GB/s | %峰值 | 相比上一级 |")
+        lines.append("|---|---|---|---|---|---|---|")
 
     previous_ms: float | None = None
     for m in measurements:
         speedup = f"{previous_ms / m.median_ms:.2f}×" if previous_ms else "—"
         pct = f"{m.percent_peak:.1f}%" if m.percent_peak is not None else "?"
-        lines.append(
-            f"| `{m.label}` | {m.note} | {m.median_ms * 1e3:.1f} | {m.spread_ms * 1e3:.1f} | "
-            f"{m.gbps:.1f} | {pct} | {speedup} |"
-        )
+        # 逐格拼，而不是拼字符串片段 —— 片段拼接很容易少一个 '|'，
+        # 结果是"表结构坏了但数字看着都在"（这个 bug 真发生过：多出一个空单元格，
+        # 且 GB/s 与搬运量挤在同一格里）。加一条离线列数测试钉住它。
+        cells = [f"`{m.label}`", m.note, f"{m.median_ms * 1e3:.1f}", f"{m.spread_ms * 1e3:.1f}"]
+        if show_bytes:
+            cells.append(f"{m.nbytes / 1e6:.1f} MB ({m.nbytes / nbytes_ideal:.2f}×)")
+        cells += [f"{m.gbps:.1f}", pct, speedup]
+        lines.append("| " + " | ".join(cells) + " |")
         previous_ms = m.median_ms
 
     if baseline is not None:
         pct = f"{baseline.percent_peak:.1f}%" if baseline.percent_peak is not None else "?"
         fastest = min(measurements, key=lambda x: x.median_ms)
         ratio = fastest.median_ms / baseline.median_ms
-        lines.append(
-            f"| **{baseline.label}** | {baseline.note} | {baseline.median_ms * 1e3:.1f} | "
-            f"{baseline.spread_ms * 1e3:.1f} | {baseline.gbps:.1f} | {pct} | "
-            f"最快变体是它的 {ratio:.2f}× |"
-        )
+        cells = [f"**{baseline.label}**", baseline.note,
+                 f"{baseline.median_ms * 1e3:.1f}", f"{baseline.spread_ms * 1e3:.1f}"]
+        if show_bytes:
+            cells.append(f"{baseline.nbytes / 1e6:.1f} MB "
+                         f"({baseline.nbytes / nbytes_ideal:.2f}×)")
+        cells += [f"{baseline.gbps:.1f}", pct, f"最快变体是它的 {ratio:.2f}×"]
+        lines.append("| " + " | ".join(cells) + " |")
 
     lines.append("")
     if t_ms is not None:
