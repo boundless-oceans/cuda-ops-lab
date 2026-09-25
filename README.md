@@ -39,6 +39,9 @@
 | **但"块内优化没用"不能外推**：scan 的块内 work 是每元素 O(log B) 而不是 O(1)，同一类手法第一次能值 **400 µs** | [第 4 章](kernels/04_scan/README.md) |
 | **work-efficient 不一定更快**：Blelloch 的总 work 比 Kogge-Stone 少 3 倍，实测却慢 **27%** —— 在 GPU 上"级数 + 发散"比总 work 值钱 | [第 4 章](kernels/04_scan/README.md) |
 | **`%峰值` 高不等于快**：12N 做到 90%（393 µs）打不过 8N 做到 85%（308 µs）。判据要看时间，不看百分比 | [第 4 章](kernels/04_scan/README.md) |
+| **跨步写比跨步读贵得多**（1.81×）：写只命中 sector 里的 4 字节 → DRAM read-modify-write；读的过取却被同一个 block 的 L2 复用接住 | [第 5 章](kernels/05_transpose/README.md) |
+| **bank conflict 是真的，但只有 5.1%**（差距是噪声的 16 倍）——共享内存比显存快 29 倍，被 32 路冲突打回原形仍快 1.8 倍。第 3 章的 padding 则是**真空操作** | [第 5 章](kernels/05_transpose/README.md) |
+| **我们的转置比 torch 快 1.87 倍**：`transpose().contiguous()` 只有 49% 峰值 | [第 5 章](kernels/05_transpose/README.md) |
 | `sigmoid` 带 `exp` 却和 `relu` 带宽**一模一样**——`exp` 被访存延迟完全盖住 | [第 2 章](kernels/02_elementwise/README.md) |
 
 ---
@@ -157,13 +160,14 @@ docs/        专题文档
 | 2 | elementwise 五级阶梯 | ✅ |
 | 3 | reduction 五级阶梯（sum / max） | ✅ |
 | 4 | scan 六级阶梯（inclusive prefix sum） | ✅ |
-| 5~7 | transpose / softmax / norm | ⬜ |
+| 5 | transpose 六级阶梯（bank conflict 专题） | ✅ |
+| 6~7 | softmax / norm | ⬜ |
 | 8 | GEMM（比赛核心） | ⬜ |
 | 9~10 | attention / 量化 | ⬜ |
 | — | Ascend C 落地 | ⬜ |
 
-当前规模：**38 个 kernel**（8 个算子 × 37 个变体）、**82 个测试用例**、
-**两条独立的性能测量路径**（Python/torch 与纯 CUDA，本章在 0.5% 内互相印证）。
+当前规模：**44 个 kernel**（9 个算子 × 43 个变体）、**93 个测试用例**、
+**两条独立的性能测量路径**（Python/torch 与纯 CUDA，两边在 1% 内互相印证）。
 
 ---
 
