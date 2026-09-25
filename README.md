@@ -36,6 +36,9 @@
 | **occupancy 最低的那档反而快 5%**：可复现（两条测量路径 + 交错测量都确认），但机制仍未查明 | [第 1 章](kernels/01_execution/README.md) |
 | **块内归约的优化测不出来**：同步 8 次 → 1 次、共享内存访问 26 次 → 2 次（SASS 可证），耗时**一动不动** —— 因为按理论下限算，块内那棵树只占 **0.1%** | [第 3 章](kernels/03_reduction/README.md) |
 | 而**只用 1 个 block 慢 16.3 倍** —— 这一个变量的权重比上面那条"优化"大三个数量级 | [第 3 章](kernels/03_reduction/README.md) |
+| **但"块内优化没用"不能外推**：scan 的块内 work 是每元素 O(log B) 而不是 O(1)，同一类手法第一次能值 **400 µs** | [第 4 章](kernels/04_scan/README.md) |
+| **work-efficient 不一定更快**：Blelloch 的总 work 比 Kogge-Stone 少 3 倍，实测却慢 **27%** —— 在 GPU 上"级数 + 发散"比总 work 值钱 | [第 4 章](kernels/04_scan/README.md) |
+| **`%峰值` 高不等于快**：12N 做到 90%（393 µs）打不过 8N 做到 85%（308 µs）。判据要看时间，不看百分比 | [第 4 章](kernels/04_scan/README.md) |
 | `sigmoid` 带 `exp` 却和 `relu` 带宽**一模一样**——`exp` 被访存延迟完全盖住 | [第 2 章](kernels/02_elementwise/README.md) |
 
 ---
@@ -153,13 +156,14 @@ docs/        专题文档
 | 1 | 执行模型 + occupancy 实验 | ✅ |
 | 2 | elementwise 五级阶梯 | ✅ |
 | 3 | reduction 五级阶梯（sum / max） | ✅ |
-| 4~7 | scan / transpose / softmax / norm | ⬜ |
+| 4 | scan 六级阶梯（inclusive prefix sum） | ✅ |
+| 5~7 | transpose / softmax / norm | ⬜ |
 | 8 | GEMM（比赛核心） | ⬜ |
 | 9~10 | attention / 量化 | ⬜ |
 | — | Ascend C 落地 | ⬜ |
 
-当前规模：**30 个 kernel**（7 个算子 × 若干变体）、**68 个测试用例**、
-**两条独立的性能测量路径**（Python/torch 与纯 CUDA，两者在 1% 内互相印证）。
+当前规模：**38 个 kernel**（8 个算子 × 37 个变体）、**82 个测试用例**、
+**两条独立的性能测量路径**（Python/torch 与纯 CUDA，本章在 0.5% 内互相印证）。
 
 ---
 
