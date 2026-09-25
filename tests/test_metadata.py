@@ -58,15 +58,28 @@ def test_op_spec_fields() -> None:
     assert_true(not problems, "; ".join(problems))
 
 
-@test("形状覆盖 n=0 与 n=1", group="meta")
+@test("形状覆盖 0 元素与单元素", group="meta")
 def test_shapes_cover_edges() -> None:
+    """每个算子都必须有"空输入"和"极小输入"两个测试形状。
+
+    判据是**元素个数**而不是形状元组本身 —— 第 5 章之前所有算子的形状都是一维，
+    写 `(0,) in shapes` 就够了；但二维算子的空输入长成 `(0, 5)` 或 `(5, 0)`，
+    单元素长成 `(1, 1)`。按元组判会**误报**，按元素个数判对两种都成立。
+    """
+
+    def nelem(shape) -> int:
+        n = 1
+        for d in shape:
+            n *= d
+        return n
+
     problems = []
     for chapter, op, spec in reg.iter_ops():
-        shapes = {tuple(s) for s in spec["shapes"]}
-        if (0,) not in shapes:
-            problems.append(f"{chapter}/{op} 缺 n=0（空输入）")
-        if (1,) not in shapes:
-            problems.append(f"{chapter}/{op} 缺 n=1（极小）")
+        sizes = {nelem(tuple(s)) for s in spec["shapes"]}
+        if 0 not in sizes:
+            problems.append(f"{chapter}/{op} 缺 0 元素（空输入）")
+        if 1 not in sizes:
+            problems.append(f"{chapter}/{op} 缺单元素（极小）")
     assert_true(not problems, "; ".join(problems))
 
 
